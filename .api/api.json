@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "apis": [
+    {
+      "identifier": "dtone",
+      "source": "@dtone/v1.0#4kfre8l2mhbw1l2u",
+      "integrity": "sha512-ESrE/30KuOdw2ELrTkJqjgdMv9HyFpJBQfr0KbIaoXkxNzkLvbFfSZH3+0Lt+71n6BMs2kV/Lv/p9PedNvZtjw==",
+      "installerVersion": "6.1.3"
+    }
+  ]
+}
