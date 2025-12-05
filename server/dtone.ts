@@ -16,10 +16,8 @@ if (!DTONE_API_KEY || !DTONE_API_SECRET) {
   throw new Error('FATAL: Missing DTOne credentials in .env file');
 }
 
-// Initialize Auth
 dtone.auth(DTONE_API_KEY, DTONE_API_SECRET);
 
-// Set Server URL
 if (DTONE_MODE === 'production') {
   console.log('[DTOne] 🚀 Mode: PRODUCTION');
   dtone.server('https://dvs-api.dtone.com/v1');
@@ -66,7 +64,7 @@ function handleApiError(error: any, context: string): { error: string, code: str
 export const dtoneService = {
 
   // ----------------------------------------
-  // A. GET COUNTRIES
+  // A. GET COUNTRIES (PAGINATION FIX)
   // ----------------------------------------
   async getCountries(serviceId: number = 1): Promise<ApiResponse<Country[]>> {
     if (!serviceId || serviceId <= 0) {
@@ -76,32 +74,51 @@ export const dtoneService = {
     console.log(`[DTOne] Fetching Countries for Service ${serviceId}...`);
     
     try {
-      const response = await dtone.getCountries({
-        service_id: serviceId,
-        per_page: 100 
-      });
-      
-      const raw = response.data || response;
-      
-      // FIX IS HERE: Added 'as any[]' to force TypeScript to treat this as an array
-      const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || [])) as any[];
-      
-      const countries: Country[] = [];
+      let page = 1;
+      let allCountries: Country[] = [];
+      let hasMore = true;
 
-      for (const c of list) {
-        const iso = c.iso_code || c.isoCode;
-        if (iso && c.name) {
-          countries.push({
-            iso_code: iso,
-            name: c.name
-          });
+      while (hasMore) {
+        // Fetch specific page
+        const response = await dtone.getCountries({
+          service_id: serviceId,
+          page: page,
+          per_page: 100
+        });
+
+        // Unwrap data
+        const raw = response.data || response;
+        const list = Array.isArray(raw) ? raw : (raw.data || raw.payload || []);
+
+        if (list.length === 0) {
+          hasMore = false; // Stop if no data on this page
+        } else {
+          // Map and add to our master list
+          for (const c of list) {
+            // Check both snake_case and camelCase just to be safe
+            const iso = c.iso_code || c.isoCode;
+            if (iso && c.name) {
+              allCountries.push({
+                iso_code: iso,
+                name: c.name
+              });
+            }
+          }
+          
+          // Check if we hit the limit, otherwise continue
+          if (list.length < 100) {
+             hasMore = false;
+          } else {
+             page++;
+          }
         }
       }
 
-      countries.sort((a, b) => a.name.localeCompare(b.name));
+      // Sort alphabetically
+      allCountries.sort((a, b) => a.name.localeCompare(b.name));
 
-      console.log(`[DTOne] Found ${countries.length} countries`);
-      return { success: true, data: countries };
+      console.log(`[DTOne] ✅ Total Countries Found: ${allCountries.length}`);
+      return { success: true, data: allCountries };
 
     } catch (error: any) {
       const err = handleApiError(error, 'Get Countries');
