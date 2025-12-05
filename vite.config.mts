@@ -1,14 +1,14 @@
 import { defineConfig } from 'vite';
-// Ensure this specific plugin is installed: npm i -D @vitejs/plugin-react-swc
+// Ensure this plugin is used
 import reactswc from '@vitejs/plugin-react-swc'; 
 
 export default defineConfig({
   plugins: [
-    // 💡 KEY CHANGE: Using the SWC compiler for Fast Refresh
+    // 💡 KEY CHANGE: Using the SWC compiler
     reactswc(), 
   ],
   server: {
-    // Ensure this matches the port your server uses (5000)
+    // Proxy for calling the Node Backend
     proxy: {
       '/api': 'http://localhost:5000'
     }
