@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Service ID 1)
- * Timestamp: 2025-12-05T17:17:08.566Z
+ * Timestamp: 2025-12-05T18:44:22.925Z
  * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 

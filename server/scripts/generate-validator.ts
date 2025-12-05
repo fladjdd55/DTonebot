@@ -5,7 +5,7 @@ import path from 'path';
 const API_URL = 'http://localhost:5000/api/countries';
 
 // Resolve path: server/scripts/ -> server/ -> root/ -> client/src/shared/countryValidator.ts
-const TARGET_FILE = path.join(__dirname, '../../client/src/shared/countryValidator.ts');
+const TARGET_FILE = path.join(__dirname, '../../src/shared/countryValidator.ts');
 
 async function generateValidator() {
   console.log('\n🔄 SYNCING COUNTRIES...');
