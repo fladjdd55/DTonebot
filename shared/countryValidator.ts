@@ -1,61 +1,33 @@
 // shared/countryValidator.ts
-import { getCountryCallingCode } from 'libphonenumber-js';
 
 export interface Country {
   name: string;
-  code: string;     // ISO2 (e.g. US)
-  iso3: string;     // ISO3 (e.g. USA)
+  code: string;     // ISO2
+  iso3: string;     // ISO3
   dialCode: string;
 }
 
-
-/**
- * Gets all available countries sorted alphabetically
- */
-export const getAllCountries = (): Country[] => {
-  return [...COUNTRIES].sort((a, b) => a.name.localeCompare(b.name));
+// Helper to sort countries
+export const getAllCountries = (countries: Country[]): Country[] => {
+  return [...countries].sort((a, b) => a.name.localeCompare(b.name));
 };
 
-/**
- * Filters countries based on search query (Name, Code, ISO3, or Dial Code)
- */
-export const filterCountries = (query: string, countries: Country[] = COUNTRIES): Country[] => {
-  if (!query) return getAllCountries();
+// The logic you fixed earlier, now centralized here
+export const filterCountries = (countries: Country[], query: string): Country[] => {
+  const list = countries || [];
   
-  const searchTerm = query.toLowerCase();
+  if (!query) return getAllCountries(list);
   
-  return countries.filter(country =>
-    country.name.toLowerCase().includes(searchTerm) ||
-    country.code.toLowerCase().includes(searchTerm) || // Search by 'US'
-    country.iso3.toLowerCase().includes(searchTerm) || // Search by 'USA'
-    country.dialCode.includes(searchTerm)              // Search by '+1'
+  const term = query.toLowerCase();
+  return list.filter(c =>
+    c.name.toLowerCase().includes(term) ||
+    c.code.toLowerCase().includes(term) ||
+    c.dialCode.includes(term)
   );
 };
 
-/**
- * Finds a country by its code
- */
-export const getCountryByCode = (code: string): Country | undefined => {
-  return COUNTRIES.find(country => country.code === code);
-};
+export const getCountryByCode = (countries: Country[], code: string) => 
+  (countries || []).find(c => c.code === code);
 
-/**
- * Validates if a country code is supported
- */
-export const isCountrySupported = (code: string): boolean => {
-  return COUNTRIES.some(country => country.code === code);
-};
-
-/**
- * Gets the dial code for a specific country code
- */
-export const getCountryDialCode = (countryCode: string): string => {
-  const country = getCountryByCode(countryCode);
-  if (country) return country.dialCode;
-  
-  try {
-    return `+${getCountryCallingCode(countryCode)}`;
-  } catch {
-    return '+--';
-  }
-};
+export const isCountrySupported = (countries: Country[], code: string) => 
+  (countries || []).some(c => c.code === code);

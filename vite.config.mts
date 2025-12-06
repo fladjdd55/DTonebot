@@ -1,16 +1,20 @@
+// vite.config.mts
 import { defineConfig } from 'vite';
-// Ensure this plugin is used
-import reactswc from '@vitejs/plugin-react-swc'; 
+import react from '@vitejs/plugin-react';
+import path from 'path';
 
 export default defineConfig({
-  plugins: [
-    // 💡 KEY CHANGE: Using the SWC compiler
-    reactswc(), 
-  ],
+  plugins: [react()],
+  resolve: {
+    alias: {
+      // This allows you to simply import from '@shared/...' if you prefer
+      '@shared': path.resolve(__dirname, '../shared'),
+    },
+  },
   server: {
-    // Proxy for calling the Node Backend
-    proxy: {
-      '/api': 'http://localhost:5000'
-    }
-  }
+    fs: {
+      // Allow serving files from one level up to the project root
+      allow: ['..'],
+    },
+  },
 });

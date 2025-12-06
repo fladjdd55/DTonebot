@@ -1,17 +1,14 @@
 /**
- * AUTO-GENERATED FILE
- * Source: DTOne API (Service ID 1)
- * Timestamp: 2025-12-06T05:59:15.844Z
- * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
+ * AUTO-GENERATED DATA FILE
+ * Source: DTOne API
+ * Logic imported from: /shared/countryValidator.ts
+ * Timestamp: 2025-12-06T06:27:20.384Z
  */
 
-export interface Country {
-  name: string;
-  code: string;     // ISO2
-  iso3: string;     // ISO3
-  dialCode: string;
-}
+import { Country } from '../../../shared/countryValidator';
+export * from '../../../shared/countryValidator';
 
+// The Live Data List
 export const COUNTRIES: Country[] = [
   {
     "name": "Afghanistan",
@@ -950,41 +947,3 @@ export const COUNTRIES: Country[] = [
     "dialCode": "+263"
   }
 ];
-
-/**
- * Returns all countries, sorted by name.
- * Accepts the live list as an argument (defaults to static list).
- */
-export const getAllCountries = (countries: Country[] = COUNTRIES): Country[] => {
-  return [...countries].sort((a, b) => a.name.localeCompare(b.name));
-};
-
-/**
- * Filters the list of countries based on a search query.
- * Accepts the live list as the first argument to avoid "toLowerCase" crashes.
- */
-export const filterCountries = (countries: Country[], query: string): Country[] => {
-  // Safety check
-  const list = countries || [];
-  
-  if (!query) return getAllCountries(list);
-  
-  const term = query.toLowerCase();
-  return list.filter(c =>
-    c.name.toLowerCase().includes(term) ||
-    c.code.toLowerCase().includes(term) ||
-    c.dialCode.includes(term)
-  );
-};
-
-/**
- * Finds a country by its ISO2 code.
- */
-export const getCountryByCode = (countries: Country[], code: string) => 
-  countries.find(c => c.code === code);
-
-/**
- * Checks if a country code is supported.
- */
-export const isCountrySupported = (countries: Country[], code: string) => 
-  countries.some(c => c.code === code);
