@@ -19,7 +19,7 @@ export async function syncOperators() {
     const operators = apiResponse.data;
     console.log(`   ✅ Retrieved ${operators.length} operators.`);
 
-    // 2. Generate File Content
+    // 2. Generate File Content with STRICT TYPES
     const fileContent = `/**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
@@ -27,10 +27,16 @@ export async function syncOperators() {
  * * Run 'npx ts-node server/scripts/sync-operators.ts' to update.
  */
 
+export interface Region {
+  name: string;
+  code: string;
+}
+
 export interface Operator {
   id: number;
   name: string;
   countryCode: string;
+  regions: Region[] | null; // 👈 Strict type instead of 'any'
 }
 
 export const OPERATORS: Operator[] = ${JSON.stringify(operators, null, 2)};

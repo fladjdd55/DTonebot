@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
- * Timestamp: 2025-12-06T11:30:34.800Z
+ * Timestamp: 2025-12-06T18:37:07.195Z
  * * Run 'npx ts-node server/scripts/sync-operators.ts' to update.
  */
 
@@ -9,6 +9,7 @@ export interface Operator {
   id: number;
   name: string;
   countryCode: string;
+  regions: any; 
 }
 
 export const OPERATORS: Operator[] = [

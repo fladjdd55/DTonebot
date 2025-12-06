@@ -1,5 +1,3 @@
-// client/src/services/api.ts
-
 export interface Product {
   id: number;
   name: string;
@@ -12,7 +10,9 @@ export interface Product {
   benefits: string[];
 }
 
-const API_URL = 'http://localhost:5000/api';
+// 🚀 DYNAMIC URL: Uses VITE_API_URL if set, otherwise defaults to localhost:5000
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const API_URL = `${BASE_URL}/api`;
 
 export const rechargeApi = {
   async lookup(mobile: string) {
@@ -41,7 +41,7 @@ export const rechargeApi = {
     const res = await fetch(`${API_URL}/purchase`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, mobile, amount, unit }) // 👈 Sending 'unit'
+      body: JSON.stringify({ productId, mobile, amount, unit })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');

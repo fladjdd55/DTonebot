@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-// Import the static list as a fallback
 import { COUNTRIES as STATIC_COUNTRIES, type Country } from '../shared/countryValidator';
 
 export { type Country };
+
+// 🚀 DYNAMIC URL
+const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 export function useCountries() {
   const [countries, setCountries] = useState<Country[]>([]);
@@ -13,8 +15,7 @@ export function useCountries() {
   useEffect(() => {
     const fetchCountries = async () => {
       try {
-        // 1. Try to fetch from the live Server API
-        const response = await fetch('http://localhost:5000/api/countries');
+        const response = await fetch(`${BASE_URL}/api/countries`);
 
         if (!response.ok) {
           throw new Error('Server returned error');
@@ -30,13 +31,9 @@ export function useCountries() {
         }
 
       } catch (err) {
-        // 2. FALLBACK: If Server is offline or fails, use the static file
         console.warn('⚠️ Server unreachable. Using static country cache.', err);
         setCountries(STATIC_COUNTRIES);
         setUsingFallback(true);
-        
-        // We don't set 'error' here because the app is still working!
-        // Only set error if even the static list is empty
         if (STATIC_COUNTRIES.length === 0) {
           setError('Could not load countries (Server offline & Cache empty)');
         }

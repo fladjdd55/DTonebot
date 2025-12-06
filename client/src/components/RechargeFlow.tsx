@@ -8,6 +8,7 @@ import { useOperators } from '../hooks/useOperators';
 import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValidationResult } from '../../../shared/phoneValidator'; 
 import { filterCountries, type Country } from '../shared/countryValidator'; 
 import { rechargeApi, type Product } from '../services/api';
+import PaymentModal from './PaymentModal'; // 👈 Payment Component
 
 export default function RechargeFlow() {
   // --- STATE ---
@@ -34,6 +35,10 @@ export default function RechargeFlow() {
   
   // Manual Selection Mode
   const [showManualSelection, setShowManualSelection] = useState(false);
+
+  // 💳 PAYMENT STATE
+  const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number} | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
@@ -64,7 +69,7 @@ export default function RechargeFlow() {
   }, [operator, countries]);
 
 
-  // --- HANDLERS ---
+  // --- HANDLERS: UI ---
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -109,6 +114,8 @@ export default function RechargeFlow() {
     const validation = validatePhoneNumber(digits, code);
     setValidationState(validation);
   };
+
+  // --- HANDLERS: API FLOW ---
 
   const handleLookupOperator = async () => {
     if (!selectedCountry || !validationState?.valid) return;
@@ -157,9 +164,11 @@ export default function RechargeFlow() {
     }
   };
 
+  // 🔴 MODIFIED: Opens Payment Modal instead of purchasing directly
   const handlePurchase = async (product: Product, amount?: number) => {
     const finalAmount = amount || 0;
     
+    // Validation for Ranged Products
     if (product.type === 'RANGED_VALUE_RECHARGE') {
       if (!finalAmount || finalAmount < product.min || finalAmount > product.max) {
         setApiError(`Amount must be between ${product.min} and ${product.max}`);
@@ -167,18 +176,27 @@ export default function RechargeFlow() {
       }
     }
 
-    if (!confirm(`Send ${finalAmount > 0 ? finalAmount + ' ' + product.currency : product.name} to ${validationState?.fullNumber}?`)) return;
+    // Save details and open modal
+    setPendingTxn({ product, amount: finalAmount });
+    setIsPayModalOpen(true);
+  };
 
-    setLoading(true);
+  // 🟢 NEW: Called ONLY after Stripe Payment is successful
+  const executeTransaction = async () => {
+    if (!pendingTxn) return;
+    
+    setIsPayModalOpen(false); // Close modal
+    setLoading(true); // Show loading on main screen
+
     try {
       const result = await rechargeApi.purchase(
-        product.id, 
+        pendingTxn.product.id, 
         validationState?.fullNumber || '', 
-        finalAmount,
-        product.currency
+        pendingTxn.amount,
+        pendingTxn.product.currency
       );
       setTxnResult(result);
-      setStep(3);
+      setStep(3); // Go to Success Screen
     } catch (err: any) {
       setApiError(err.message);
     } finally {
@@ -229,6 +247,7 @@ export default function RechargeFlow() {
             </div>
           )}
 
+          {/* === STEP 1: INPUT === */}
           {step === 1 && (
             <div className="space-y-6">
               {/* Country Selector */}
@@ -248,7 +267,7 @@ export default function RechargeFlow() {
                     value={searchQuery}
                     onChange={(e) => { setSearchQuery(e.target.value); setShowDropdown(true); }}
                     onFocus={() => setShowDropdown(true)}
-                    placeholder="Search country (e.g. USA)..."
+                    placeholder="Search country (e.g. USA, Ghana)..."
                     className={`w-full pr-10 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none ${selectedCountry ? 'pl-12' : 'pl-10'}`}
                   />
                   {selectedCountry && (
@@ -268,7 +287,7 @@ export default function RechargeFlow() {
                         <span className="flex items-center gap-2">
                           <ReactCountryFlag countryCode={c.code} svg /> {c.name}
                         </span>
-                        <span className="text-gray-400 text-sm">{c.dialCode}</span>
+                        <span className="text-gray-400 text-sm font-mono">{c.iso3}</span>
                       </button>
                     ))}
                   </div>
@@ -522,6 +541,18 @@ export default function RechargeFlow() {
                 Send Another
               </button>
             </div>
+          )}
+
+          {/* 👇 STRIPE PAYMENT MODAL */}
+          {pendingTxn && (
+            <PaymentModal 
+              isOpen={isPayModalOpen}
+              onClose={() => setIsPayModalOpen(false)}
+              onSuccess={executeTransaction}
+              // Parse string amount (e.g. "5000 IDR") or use custom amount
+              amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
+              currency={pendingTxn.product.currency}
+            />
           )}
 
         </div>
