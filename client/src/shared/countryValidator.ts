@@ -1,14 +1,13 @@
 /**
- * AUTO-GENERATED DATA FILE
- * Source: DTOne API
- * Logic imported from: /shared/countryValidator.ts
- * Timestamp: 2025-12-06T06:27:20.384Z
+ * AUTO-GENERATED FILE
+ * Source: DTOne API (Cached)
+ * Timestamp: 2025-12-06T11:30:27.212Z
+ * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 
 import { Country } from '../../../shared/countryValidator';
 export * from '../../../shared/countryValidator';
 
-// The Live Data List
 export const COUNTRIES: Country[] = [
   {
     "name": "Afghanistan",

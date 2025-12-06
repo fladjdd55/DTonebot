@@ -1,13 +1,15 @@
 // server/types.ts
 
-export type ApiResponse<T> =
-  | { success: true; data: T }
-  | { success: false; error: string; code: string };
+export interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  code?: string;
+}
 
-// --- NEW INTERFACE ---
 export interface Country {
-  iso_code: string;
   name: string;
+  iso_code: string;
 }
 
 export interface LookupResult {
@@ -25,6 +27,7 @@ export interface Product {
   currency: string;
   min: number;
   max: number;
+  subserviceId?: number; // 👈 NEW FIELD
 }
 
 export interface TransactionResult {

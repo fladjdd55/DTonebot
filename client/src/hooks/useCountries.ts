@@ -1,33 +1,45 @@
 import { useState, useEffect } from 'react';
+// Import the static list as a fallback
+import { COUNTRIES as STATIC_COUNTRIES, type Country } from '../shared/countryValidator';
 
-// This interface matches exactly what your server/Routes.ts returns
-export interface Country {
-  name: string;
-  code: string;     // ISO2 (e.g., "US")
-  iso3: string;     // ISO3 or fallback (e.g., "USA")
-  dialCode: string; // Dialing prefix (e.g., "+1")
-}
+export { type Country };
 
 export function useCountries() {
   const [countries, setCountries] = useState<Country[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
+  const [usingFallback, setUsingFallback] = useState(false);
 
   useEffect(() => {
     const fetchCountries = async () => {
       try {
-        // Fetch from your local Node backend
+        // 1. Try to fetch from the live Server API
         const response = await fetch('http://localhost:5000/api/countries');
 
         if (!response.ok) {
-          throw new Error(`Failed to load countries: ${response.statusText}`);
+          throw new Error('Server returned error');
         }
 
         const data = await response.json();
-        setCountries(data);
-      } catch (err: any) {
-        console.error('Country Fetch Error:', err);
-        setError(err.message || 'Unknown error occurred');
+        
+        if (Array.isArray(data) && data.length > 0) {
+          setCountries(data);
+          setUsingFallback(false);
+        } else {
+          throw new Error('API returned empty list');
+        }
+
+      } catch (err) {
+        // 2. FALLBACK: If Server is offline or fails, use the static file
+        console.warn('⚠️ Server unreachable. Using static country cache.', err);
+        setCountries(STATIC_COUNTRIES);
+        setUsingFallback(true);
+        
+        // We don't set 'error' here because the app is still working!
+        // Only set error if even the static list is empty
+        if (STATIC_COUNTRIES.length === 0) {
+          setError('Could not load countries (Server offline & Cache empty)');
+        }
       } finally {
         setLoading(false);
       }
@@ -36,5 +48,5 @@ export function useCountries() {
     fetchCountries();
   }, []);
 
-  return { countries, loading, error };
+  return { countries, loading, error, usingFallback };
 }

@@ -1,9 +1,8 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
-import { getCountryCallingCode, CountryCode } from 'libphonenumber-js';
-import isoCountries from 'i18n-iso-countries';
-// @ts-ignore
 import { dtoneService } from './dtone';
+import { syncCountries } from './scripts/sync-countries';
+import { syncOperators } from './scripts/sync-operators'; 
 
 const app = express();
 const PORT = 5000;
@@ -12,57 +11,54 @@ app.use(cors());
 app.use(express.json());
 
 // ==================================================================
-// ROUTE 1: GET COUNTRIES
+// 🚀 CACHE SYSTEM
 // ==================================================================
-app.get('/api/countries', async (req: Request, res: Response): Promise<any> => {
-  try {
-    // 1. Fetch clean list from DTOne Service (Service ID 1 = Mobile)
-    const apiResponse = await dtoneService.getCountries(1);
+let COUNTRY_CACHE: any[] = [];
+let OPERATOR_CACHE: any[] = []; 
 
-    if (!apiResponse.success) {
-      return res.status(500).json({ error: apiResponse.error });
-    }
+const initializeCache = async () => {
+  console.log('[Server] ⏳ Initializing Caches...');
+  
+  // 1. Sync Countries
+  const countries = await syncCountries();
+  if (countries) COUNTRY_CACHE = countries;
 
-    // 2. Enrich with Dial Codes
-    const rawCountries = apiResponse.data as any[];
-    
-    const enrichedCountries = rawCountries.map((c) => {
-      let dialCode = '';
-      const iso3 = (c.iso_code || '').toUpperCase();
-      
-      // Convert ISO Alpha-3 (USA) to ISO Alpha-2 (US)
-      // libphonenumber-js strictly requires 2-letter codes
-      const iso2 = isoCountries.alpha3ToAlpha2(iso3) as CountryCode;
+  // 2. Sync Operators
+  const operators = await syncOperators();
+  if (operators) OPERATOR_CACHE = operators;
+  
+  console.log(`[Server] 🚀 System Ready! Countries: ${COUNTRY_CACHE.length}, Operators: ${OPERATOR_CACHE.length}`);
+};
 
-      if (iso2) {
-        try {
-          dialCode = `+${getCountryCallingCode(iso2)}`;
-        } catch (e) {
-          // Ignore countries with no standard dial code or invalid conversion
-        }
-      }
+// Start & Schedule Daily Updates
+initializeCache();
+setInterval(() => {
+  console.log('[Server] ⏰ Running Daily Maintenance...');
+  syncCountries().then(d => { if(d) COUNTRY_CACHE = d; });
+  syncOperators().then(d => { if(d) OPERATOR_CACHE = d; });
+}, 1000 * 60 * 60 * 24); // 24 Hours
 
-      return {
-        name: c.name,
-        code: iso2 || iso3,    // Prefer ISO2 for frontend flags/validation
-        iso3: iso3,
-        dialCode: dialCode
-      };
-    });
 
-    // 3. Filter invalid (only keep ones where we successfully found a dial code)
-    const validCountries = enrichedCountries.filter(c => c.dialCode !== '');
+// ==================================================================
+// ROUTES
+// ==================================================================
 
-    console.log(`[API] Returning ${validCountries.length} valid countries (filtered from ${rawCountries.length})`);
-    return res.json(validCountries);
-
-  } catch (error: any) {
-    console.error('Countries Error:', error.message);
-    return res.status(500).json({ error: 'Failed to load countries' });
-  }
+app.get('/api/countries', (req: Request, res: Response): any => {
+  return res.json(COUNTRY_CACHE);
 });
 
-// ... (Rest of your routes: Lookup, Products, Purchase stay the same) ...
+// 🆕 NEW ROUTE: Serve Operators from Cache
+app.get('/api/operators', (req: Request, res: Response): any => {
+  const { country } = req.query;
+  
+  // Optional: Filter by country if requested
+  if (country) {
+    const filtered = OPERATOR_CACHE.filter(op => op.countryCode === String(country).toUpperCase());
+    return res.json(filtered);
+  }
+  
+  return res.json(OPERATOR_CACHE);
+});
 
 app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   const { mobile } = req.body;
@@ -95,11 +91,11 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
 });
 
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
-  const { productId, mobile, amount } = req.body;
+  const { productId, mobile, amount, unit } = req.body;
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
 
   try {
-    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0);
+    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit);
     if (!result.success) {
       return res.status(400).json({ error: result.error, code: result.code });
     }

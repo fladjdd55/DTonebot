@@ -1,8 +1,20 @@
 // client/src/services/api.ts
+
+export interface Product {
+  id: number;
+  name: string;
+  type: string;
+  amount: string;
+  currency: string;
+  min: number;
+  max: number;
+  subserviceId?: number;
+  benefits: string[];
+}
+
 const API_URL = 'http://localhost:5000/api';
 
 export const rechargeApi = {
-  // Step 4 in Diagram: Call Mobile Number Lookup
   async lookup(mobile: string) {
     const res = await fetch(`${API_URL}/lookup`, {
       method: 'POST',
@@ -14,7 +26,6 @@ export const rechargeApi = {
     return data;
   },
 
-  // Step 5 in Diagram: Get Products
   async getProducts(operatorId: number) {
     const res = await fetch(`${API_URL}/products`, {
       method: 'POST',
@@ -26,12 +37,11 @@ export const rechargeApi = {
     return data;
   },
 
-  // Final Step: Purchase
-  async purchase(productId: number, mobile: string, amount: number) {
+  async purchase(productId: number, mobile: string, amount: number, unit: string) {
     const res = await fetch(`${API_URL}/purchase`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, mobile, amount })
+      body: JSON.stringify({ productId, mobile, amount, unit }) // 👈 Sending 'unit'
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');

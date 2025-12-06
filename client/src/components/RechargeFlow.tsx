@@ -1,18 +1,17 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Check, AlertCircle, Phone, Loader2, Wifi, CreditCard } from 'lucide-react';
+import { Search, Check, AlertCircle, Phone, Loader2, Wifi, CreditCard, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 import type { CountryCode } from 'libphonenumber-js';
-import { getAllCountries, filterCountries } from '../shared/countryValidator';
 
-// Import the hook to fetch data asynchronously (The correct data source)
 import { useCountries } from '../hooks/useCountries'; 
-// Import validator logic (We assume the functions now accept the country list)
-import type { Country } from '../shared/countryValidator'; // Use the Country type
-import { rechargeApi } from '../services/api';
+import { useOperators } from '../hooks/useOperators';
+import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValidationResult } from '../../../shared/phoneValidator'; 
+import { filterCountries, type Country } from '../shared/countryValidator'; 
+import { rechargeApi, type Product } from '../services/api';
 
 export default function RechargeFlow() {
   // --- STATE ---
-  const [step, setStep] = useState<1 | 2 | 3>(1); // 1=Input, 2=Plans, 3=Success
+  const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1); 
   
   // Input State
   const [searchQuery, setSearchQuery] = useState('');
@@ -25,24 +24,47 @@ export default function RechargeFlow() {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
   const [operator, setOperator] = useState<any>(null);
-  const [products, setProducts] = useState<any[]>([]);
+  const [products, setProducts] = useState<Product[]>([]);
   const [txnResult, setTxnResult] = useState<any>(null);
+  
+  // UI State
+  const [logoError, setLogoError] = useState(false);
+  const [activeTab, setActiveTab] = useState<'AIRTIME' | 'DATA' | 'BUNDLES'>('AIRTIME');
+  const [customAmount, setCustomAmount] = useState('');
+  
+  // Manual Selection Mode
+  const [showManualSelection, setShowManualSelection] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
+  const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.code);
 
-  // --- ASYNCHRONOUS DATA SOURCE (FIX: The data is loaded here) ---
-  const { countries, loading: countriesLoading, error: countriesError } = useCountries();
-
-  // FIX: Filter countries based on the LIVE array from the hook
+  // --- FILTERING LOGIC ---
   const filteredCountries = useMemo(() => {
-    // We pass the LIVE 'countries' array to the filter function
     return filterCountries(countries, searchQuery);
   }, [searchQuery, countries]);
 
+  // Categorize Products
+  const categorizedProducts = useMemo(() => {
+    return {
+      AIRTIME: products.filter(p => p.subserviceId === 11 || !p.subserviceId),
+      DATA: products.filter(p => p.subserviceId === 12),
+      BUNDLES: products.filter(p => p.subserviceId === 13),
+    };
+  }, [products]);
 
-  // --- HANDLERS: UI ---
-  
-  // Close dropdown on click outside
+  const rangedProduct = useMemo(() => {
+    return categorizedProducts.AIRTIME.find(p => p.type === 'RANGED_VALUE_RECHARGE');
+  }, [categorizedProducts.AIRTIME]);
+
+  const operatorCountryName = useMemo(() => {
+    if (!operator || !countries.length) return operator?.countryIso || 'Unknown';
+    const found = countries.find(c => c.code === operator.countryIso || c.iso3 === operator.countryIso);
+    return found ? found.name : operator.countryIso;
+  }, [operator, countries]);
+
+
+  // --- HANDLERS ---
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -53,6 +75,10 @@ export default function RechargeFlow() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    if (operator) setLogoError(false);
+  }, [operator]);
+
   const handleCountrySelect = (country: Country) => {
     setSelectedCountry(country);
     setSearchQuery(country.name);
@@ -60,83 +86,99 @@ export default function RechargeFlow() {
     setPhoneNumber('');
     setValidationState(null);
     setApiError('');
+    setShowManualSelection(false);
+  };
+
+  const handleClearCountry = () => {
+    setSelectedCountry(null);
+    setSearchQuery('');
+    setPhoneNumber('');
+    setValidationState(null);
+    setShowManualSelection(false);
   };
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!selectedCountry) return;
     setApiError('');
-
     const code = selectedCountry.code as CountryCode;
     const rawValue = e.target.value;
-    
-    // 1. Format locally using your validator logic
     const isDeleting = rawValue.length < phoneNumber.length;
     const formatted = isDeleting ? rawValue : formatPhoneNumber(rawValue, code);
-    
     setPhoneNumber(formatted);
-
-    // 2. Validate locally
     const digits = extractDigits(formatted);
     const validation = validatePhoneNumber(digits, code);
     setValidationState(validation);
   };
 
-  // --- HANDLERS: API FLOW ---
-
-  // FLOW STEP 3 & 4: Lookup & Get Products
-  const handleLookupAndFetch = async () => {
+  const handleLookupOperator = async () => {
     if (!selectedCountry || !validationState?.valid) return;
-
     setLoading(true);
     setApiError('');
+    setShowManualSelection(false);
 
     try {
       const fullMobile = validationState.fullNumber || `+${extractDigits(phoneNumber)}`;
-
-      // 1. API Call: Account Lookup
       const opData = await rechargeApi.lookup(fullMobile);
       setOperator(opData);
-
-      // 2. API Call: Get Products
-      const prodData = await rechargeApi.getProducts(opData.operatorId);
-      setProducts(prodData);
-
-      setStep(2); // Move to Plans View
-
+      setStep(1.5); 
     } catch (err: any) {
       console.error(err);
-      setApiError(err.message || 'Failed to identify operator');
+      setApiError('Auto-detection failed. Please select an operator below.');
+      setShowManualSelection(true);
     } finally {
       setLoading(false);
     }
   };
 
-  // FLOW STEP 5: Purchase
-  const handlePurchase = async (product: any) => {
-    let amountToSend = 0;
+  const handleManualSelect = (op: any) => {
+    setOperator({
+      operatorId: op.id,
+      operatorName: op.name,
+      countryIso: selectedCountry?.code || '',
+      identified: true
+    });
+    setStep(1.5);
+    setShowManualSelection(false);
+    setApiError('');
+  };
 
-    // Handle Ranged Input
+  const handleConfirmOperator = async () => {
+    if (!operator) return;
+    setLoading(true);
+    setApiError('');
+    try {
+      const prodData = await rechargeApi.getProducts(operator.operatorId);
+      setProducts(prodData);
+      setStep(2);
+    } catch (err: any) {
+      setApiError('Could not load products. Server may be offline.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePurchase = async (product: Product, amount?: number) => {
+    const finalAmount = amount || 0;
+    
     if (product.type === 'RANGED_VALUE_RECHARGE') {
-      const input = prompt(`Enter amount (${product.min} - ${product.max} ${product.currency})`);
-      if (!input) return;
-      amountToSend = parseFloat(input);
-      if (amountToSend < product.min || amountToSend > product.max) {
-        alert('Invalid amount');
+      if (!finalAmount || finalAmount < product.min || finalAmount > product.max) {
+        setApiError(`Amount must be between ${product.min} and ${product.max}`);
         return;
       }
     }
 
-    if (!confirm(`Send to ${validationState?.fullNumber}?`)) return;
+    if (!confirm(`Send ${finalAmount > 0 ? finalAmount + ' ' + product.currency : product.name} to ${validationState?.fullNumber}?`)) return;
 
     setLoading(true);
     try {
       const result = await rechargeApi.purchase(
         product.id, 
         validationState?.fullNumber || '', 
-        amountToSend
+        finalAmount,
+        product.currency
       );
       setTxnResult(result);
-      setStep(3); // Success Screen
+      setStep(3);
     } catch (err: any) {
       setApiError(err.message);
     } finally {
@@ -151,24 +193,27 @@ export default function RechargeFlow() {
     setApiError('');
     setOperator(null);
     setProducts([]);
+    setCustomAmount('');
+    setShowManualSelection(false);
   };
 
   // --- RENDER ---
   
-  // FIX: Wait for countries to load
-  if (countriesLoading) {
-    return <div className="text-center p-10"><Loader2 className="w-8 h-8 mx-auto animate-spin text-indigo-600" /><p className="mt-4 text-gray-600">Loading countries list...</p></div>;
-  }
-  if (countriesError) {
-    return <div className="text-center p-10 text-red-600"><AlertCircle className="w-8 h-8 mx-auto" /><p className="mt-4">Error fetching list: {countriesError}</p></div>;
-  }
+  if (countriesLoading) return <div className="text-center p-10"><Loader2 className="w-8 h-8 mx-auto animate-spin text-indigo-600" /><p className="mt-4 text-gray-600">Loading countries list...</p></div>;
+  if (countriesError && !usingFallback && countries.length === 0) return <div className="text-center p-10 text-red-600">{countriesError}</div>;
 
   return (
     <div className="min-h-screen bg-gray-50 flex justify-center p-4 pt-10">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
         {/* HEADER */}
-        <div className="bg-indigo-600 p-6 text-white">
+        <div className="bg-indigo-600 p-6 text-white relative">
+          {(usingFallback || operatorsOffline) && (
+            <div className="absolute top-4 right-4 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
+              <Wifi className="w-3 h-3" /> OFFLINE
+            </div>
+          )}
+          
           <div className="flex items-center gap-3">
             <Phone className="w-6 h-6" />
             <h1 className="text-xl font-bold">Mobile Recharge</h1>
@@ -184,27 +229,34 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* === STEP 1: INPUT === */}
           {step === 1 && (
             <div className="space-y-6">
               {/* Country Selector */}
               <div className="relative" ref={dropdownRef}>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Country</label>
                 <div className="relative">
-                  <Search className="absolute left-3 top-3 w-5 h-5 text-gray-400" />
+                  {selectedCountry ? (
+                    <div className="absolute left-3 top-3 z-10 flex items-center justify-center w-6 h-6">
+                      <ReactCountryFlag countryCode={selectedCountry.code} svg style={{ width: '1.5em', height: '1.5em', borderRadius: '4px' }} />
+                    </div>
+                  ) : (
+                    <Search className="absolute left-3 top-3.5 w-5 h-5 text-gray-400" />
+                  )}
+
                   <input
                     type="text"
                     value={searchQuery}
-                    onChange={(e) => {
-                      setSearchQuery(e.target.value);
-                      setShowDropdown(true);
-                    }}
+                    onChange={(e) => { setSearchQuery(e.target.value); setShowDropdown(true); }}
                     onFocus={() => setShowDropdown(true)}
-                    placeholder="Select Country..."
-                    className="w-full pl-10 pr-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                    placeholder="Search country (e.g. USA)..."
+                    className={`w-full pr-10 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none ${selectedCountry ? 'pl-12' : 'pl-10'}`}
                   />
+                  {selectedCountry && (
+                    <button onClick={handleClearCountry} className="absolute right-3 top-3.5 text-gray-400 hover:text-gray-600">
+                      <X className="w-5 h-5" />
+                    </button>
+                  )}
                 </div>
-                {/* Dropdown */}
                 {showDropdown && (
                   <div className="absolute z-20 w-full mt-1 bg-white border rounded-lg shadow-lg max-h-60 overflow-y-auto">
                     {filteredCountries.map(c => (
@@ -224,7 +276,7 @@ export default function RechargeFlow() {
               </div>
 
               {/* Phone Input */}
-              <div className="opacity-100 transition-opacity">
+              <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Phone Number</label>
                 <div className="flex gap-3">
                   <div className="flex items-center justify-center px-4 bg-gray-100 border rounded-lg font-mono text-gray-600 min-w-[4rem]">
@@ -236,11 +288,9 @@ export default function RechargeFlow() {
                     onChange={handlePhoneChange}
                     disabled={!selectedCountry}
                     placeholder="Mobile Number"
-                    className="flex-1 px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-gray-50"
+                    className="flex-1 px-4 py-3 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none disabled:bg-gray-50 disabled:cursor-not-allowed"
                   />
                 </div>
-                
-                {/* Local Validation Feedback */}
                 {validationState && (
                   <div className={`mt-2 text-sm flex items-center gap-1 ${validationState.valid ? 'text-green-600' : 'text-red-500'}`}>
                     {validationState.valid ? <Check className="w-4 h-4"/> : <AlertCircle className="w-4 h-4"/>}
@@ -249,45 +299,205 @@ export default function RechargeFlow() {
                 )}
               </div>
 
-              <button
-                onClick={handleLookupAndFetch}
-                disabled={loading || !validationState?.valid}
-                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center gap-2"
-              >
-                {loading ? <Loader2 className="animate-spin" /> : 'Continue'}
-              </button>
+              {/* Action Button */}
+              {!showManualSelection && (
+                 <button onClick={handleLookupOperator} disabled={loading || !validationState?.valid} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 flex justify-center gap-2">
+                   {loading ? <Loader2 className="animate-spin" /> : 'Continue'}
+                 </button>
+              )}
+
+              {/* MANUAL SELECTION GRID */}
+              {showManualSelection && selectedCountry && (
+                <div className="mt-4">
+                  <p className="text-sm font-bold text-gray-700 mb-2">Select Operator:</p>
+                  <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                    {availableOperators.length === 0 ? (
+                       <div className="col-span-2 text-center text-sm text-gray-400 py-4">No operators found for this country.</div>
+                    ) : (
+                      availableOperators.map((op) => (
+                        <button
+                          key={op.id}
+                          onClick={() => handleManualSelect(op)}
+                          className="p-3 border rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left text-sm font-medium text-gray-700 transition-colors"
+                        >
+                          {op.name}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+              
+              {/* Manual Toggle Link */}
+              {!showManualSelection && selectedCountry && (
+                <div className="text-center mt-2">
+                  <button onClick={() => setShowManualSelection(true)} className="text-xs text-indigo-500 hover:underline">
+                    Select operator manually
+                  </button>
+                </div>
+              )}
             </div>
           )}
 
-          {/* === STEP 2: PLANS === */}
+          {/* === STEP 1.5: CONFIRM OPERATOR === */}
+          {step === 1.5 && operator && (
+            <div className="space-y-6 text-center">
+              <div className="bg-indigo-50 p-6 rounded-xl border-2 border-indigo-100">
+                <p className="text-sm text-indigo-600 font-semibold uppercase tracking-wider mb-4">Operator Detected</p>
+                <div className="flex flex-col items-center justify-center gap-3">
+                  {!logoError ? (
+                    <img 
+                      src={`https://operator-logo.dtone.com/logo-${operator.operatorId}-3.png`}
+                      alt={operator.operatorName}
+                      className="h-16 w-auto object-contain mb-2"
+                      onError={() => setLogoError(true)}
+                    />
+                  ) : (
+                    <Wifi className="w-12 h-12 text-indigo-600 mb-2" />
+                  )}
+                  <div className="text-2xl font-bold text-gray-900">{operator.operatorName}</div>
+                </div>
+                <div className="mt-2 text-gray-500 text-sm font-medium">
+                  Country: <span className="font-bold text-gray-700">{operatorCountryName}</span>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <button
+                  onClick={handleConfirmOperator}
+                  disabled={loading}
+                  className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 flex justify-center items-center gap-2"
+                >
+                  {loading ? <Loader2 className="animate-spin" /> : <>Confirm & View Plans <ArrowRight className="w-4 h-4" /></>}
+                </button>
+                <button onClick={() => setStep(1)} className="w-full text-gray-500 py-2 hover:text-gray-700 text-sm font-medium">Incorrect Operator? Go Back</button>
+              </div>
+            </div>
+          )}
+
+          {/* === STEP 2: PLANS & TABS === */}
           {step === 2 && operator && (
             <div className="space-y-4">
-              <div className="bg-blue-50 p-4 rounded-xl flex items-center justify-between">
-                <div>
-                  <div className="text-xs text-blue-500 font-bold uppercase tracking-wider">Operator</div>
-                  <div className="text-blue-900 font-bold text-lg flex items-center gap-2">
-                    <Wifi className="w-5 h-5" /> {operator.operatorName}
-                  </div>
+              <div className="flex items-center justify-between border-b pb-4">
+                <div className="flex items-center gap-2">
+                  {!logoError ? (
+                    <img 
+                      src={`https://operator-logo.dtone.com/logo-${operator.operatorId}-1.png`} 
+                      alt="" 
+                      className="w-6 h-6 object-contain"
+                      onError={() => setLogoError(true)}
+                    />
+                  ) : (
+                    <Wifi className="w-5 h-5 text-indigo-600" />
+                  )}
+                  <span className="font-bold text-gray-900">{operator.operatorName}</span>
                 </div>
                 <button onClick={resetFlow} className="text-sm text-blue-600 underline">Change</button>
               </div>
 
-              <div className="space-y-2 max-h-[400px] overflow-y-auto">
-                {products.length === 0 ? (
-                  <p className="text-center text-gray-400 py-8">No plans available.</p>
-                ) : (
-                  products.map(p => (
-                    <div key={p.id} onClick={() => handlePurchase(p)} 
-                      className="group p-4 border rounded-xl hover:border-indigo-500 cursor-pointer transition-all hover:shadow-md bg-white">
-                      <div className="flex justify-between items-center">
-                        <div>
-                          <div className="font-bold text-gray-800">{p.name}</div>
-                          <div className="text-sm text-gray-500 mt-1">{p.amount}</div>
+              {/* TABS */}
+              <div className="flex bg-gray-100 p-1 rounded-lg">
+                {(['AIRTIME', 'DATA', 'BUNDLES'] as const).map(tab => (
+                  <button
+                    key={tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
+                      activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {tab === 'AIRTIME' && <Smartphone className="w-4 h-4 inline mr-1 mb-0.5" />}
+                    {tab === 'DATA' && <Globe className="w-4 h-4 inline mr-1 mb-0.5" />}
+                    {tab === 'BUNDLES' && <Package className="w-4 h-4 inline mr-1 mb-0.5" />}
+                    {tab.charAt(0) + tab.slice(1).toLowerCase()}
+                  </button>
+                ))}
+              </div>
+
+              <div className="min-h-[250px]">
+                
+                {/* 1. AIRTIME TAB */}
+                {activeTab === 'AIRTIME' && (
+                  <div className="space-y-4">
+                    {/* CUSTOM AMOUNT INPUT */}
+                    {rangedProduct && (
+                      <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
+                        <label className="block text-xs font-bold text-indigo-700 uppercase mb-2">Custom Amount</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="number"
+                            value={customAmount}
+                            onChange={(e) => setCustomAmount(e.target.value)}
+                            placeholder={`${rangedProduct.min} - ${rangedProduct.max}`}
+                            className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
+                          />
+                          <button 
+                            onClick={() => handlePurchase(rangedProduct, parseFloat(customAmount))}
+                            disabled={!customAmount}
+                            className="bg-indigo-600 text-white px-4 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50"
+                          >
+                            Pay
+                          </button>
                         </div>
-                        <CreditCard className="w-5 h-5 text-gray-300 group-hover:text-indigo-500" />
+                        <p className="text-xs text-indigo-400 mt-1">
+                          Range: {rangedProduct.min} - {rangedProduct.max} {rangedProduct.currency}
+                        </p>
                       </div>
+                    )}
+
+                    {/* FIXED AIRTIME LIST - GRID */}
+                    <div className="space-y-2">
+                      {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE').length > 0 && 
+                        <p className="text-xs text-gray-400 font-bold uppercase mt-2">Fixed Amounts</p>
+                      }
+                      
+                      <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
+                        {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE').map(p => (
+                          <button 
+                            key={p.id} 
+                            onClick={() => handlePurchase(p)} 
+                            className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
+                          >
+                            <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
+                              {p.amount.split(' ')[0]}
+                            </span>
+                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
+                              {p.currency}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+
+                      {!rangedProduct && categorizedProducts.AIRTIME.length === 0 && (
+                        <div className="text-center py-10 text-gray-400">No airtime plans found.</div>
+                      )}
                     </div>
-                  ))
+                  </div>
+                )}
+
+                {/* 2. DATA & BUNDLES TABS */}
+                {(activeTab === 'DATA' || activeTab === 'BUNDLES') && (
+                  <div className="space-y-2 max-h-[300px] overflow-y-auto">
+                    {categorizedProducts[activeTab].length === 0 ? (
+                      <div className="text-center py-10 text-gray-400">
+                        <Package className="w-8 h-8 mx-auto mb-2 opacity-20" />
+                        No {activeTab.toLowerCase()} plans found.
+                      </div>
+                    ) : (
+                      categorizedProducts[activeTab].map(p => (
+                        <div key={p.id} onClick={() => handlePurchase(p)} className="group p-4 border rounded-xl hover:border-indigo-500 cursor-pointer bg-white transition-all hover:shadow-sm">
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <div className="font-bold text-gray-800">{p.name}</div>
+                              <div className="text-xs text-gray-500 mt-1 line-clamp-2">{p.description || p.amount}</div>
+                            </div>
+                            <div className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap group-hover:bg-indigo-100 group-hover:text-indigo-700">
+                              {p.amount}
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
             </div>

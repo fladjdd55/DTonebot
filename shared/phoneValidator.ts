@@ -1,10 +1,9 @@
-// src/validators/phoneValidator.ts
+// shared/phoneValidator.ts
 import { 
   parsePhoneNumberFromString, 
   getCountryCallingCode, 
   AsYouType
 } from 'libphonenumber-js';
-// Import CountryCode using 'import type' to prevent runtime crashes
 import type { CountryCode } from 'libphonenumber-js';
 
 export interface PhoneValidationResult {
@@ -55,7 +54,8 @@ export const validatePhoneNumber = (number: string, countryCode: CountryCode): P
       return {
         valid: true,
         message: 'Valid phone number',
-        fullNumber: phoneNumber.formatInternational(),
+        // FIX: Use E.164 to ensure the API receives a clean number (e.g. +12125551234)
+        fullNumber: phoneNumber.format('E.164'), 
         national: phoneNumber.formatNational(),
         type: phoneNumber.getType() || 'Unknown',
         country: phoneNumber.country
@@ -78,7 +78,12 @@ export const validatePhoneNumber = (number: string, countryCode: CountryCode): P
 
 export const formatPhoneNumber = (input: string, countryCode: CountryCode): string => {
   if (!countryCode || !input) return input || '';
-  return new AsYouType(countryCode).input(input);
+  try {
+    // Wrapped in try/catch to prevent crashes on invalid inputs
+    return new AsYouType(countryCode).input(input);
+  } catch (e) {
+    return input;
+  }
 };
 
 export const extractDigits = (phoneNumber: string): string => {

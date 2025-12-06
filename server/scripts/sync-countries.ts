@@ -1,56 +1,89 @@
 import fs from 'fs';
 import path from 'path';
+import { getCountryCallingCode, CountryCode } from 'libphonenumber-js';
+import isoCountries from 'i18n-iso-countries';
+import { dtoneService } from '../dtone';
 
 // CONFIGURATION
-const API_URL = 'http://localhost:5000/api/countries';
-// This resolves to: root/client/src/shared/countryValidator.ts
+// Target: client/src/shared/countryValidator.ts
 const TARGET_FILE = path.join(__dirname, '../../client/src/shared/countryValidator.ts');
 
-async function syncCountries() {
-  console.log('\n🔄 SYNCING MOBILE-SUPPORTED COUNTRIES...');
-  console.log(`   Source: ${API_URL}`);
-  console.log(`   Target: ${TARGET_FILE}`);
+export async function syncCountries() {
+  console.log('\n🔄 [Cache] Starting Daily Sync...');
   
   try {
-    // 1. Ensure Directory Exists
-    const dir = path.dirname(TARGET_FILE);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    // 1. Fetch RAW data from DTOne
+    const apiResponse = await dtoneService.getCountries(1);
+
+    if (!apiResponse.success || !apiResponse.data) {
+      throw new Error(apiResponse.error || 'Failed to fetch from DTOne');
     }
 
-    // 2. Fetch live data
-    const response = await fetch(API_URL);
-    if (!response.ok) throw new Error(`API Error: ${response.statusText}`);
-    const countries = await response.json();
-    
-    if (!Array.isArray(countries) || countries.length === 0) {
-      throw new Error('Received 0 countries. Aborting.');
+    const rawCountries = apiResponse.data;
+    console.log(`   ✅ DTOne returned ${rawCountries.length} raw records.`);
+
+    // 2. Enrich Data (Add Dial Codes & Clean ISOs)
+    const enrichedCountries = rawCountries.map((c) => {
+      let dialCode = '';
+      const iso3 = (c.iso_code || '').toUpperCase();
+      
+      // Convert ISO3 (USA) -> ISO2 (US) for phone lib
+      const iso2 = isoCountries.alpha3ToAlpha2(iso3) as CountryCode;
+
+      if (iso2) {
+        try {
+          dialCode = `+${getCountryCallingCode(iso2)}`;
+        } catch (e) {
+          // Ignore countries with no standard dial code
+        }
+      }
+
+      // Only return if we have a valid name and code
+      if (!c.name || !iso3) return null;
+
+      return {
+        name: c.name,
+        code: iso2 || iso3, // Prefer ISO2 for flags
+        iso3: iso3,
+        dialCode: dialCode
+      };
+    }).filter(c => c !== null && c.dialCode !== ''); // Remove invalid entries
+
+    if (enrichedCountries.length === 0) {
+      throw new Error('No valid countries found after enrichment. Aborting cache update.');
     }
 
-    // 3. Generate File Content
-    // NOTICE: We now import the logic from the root shared folder
-    // and re-export it so the rest of your app doesn't break.
+    // 3. Write to File (Persistent Cache for Frontend)
     const fileContent = `/**
- * AUTO-GENERATED DATA FILE
- * Source: DTOne API
- * Logic imported from: /shared/countryValidator.ts
+ * AUTO-GENERATED FILE
+ * Source: DTOne API (Cached)
  * Timestamp: ${new Date().toISOString()}
+ * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 
 import { Country } from '../../../shared/countryValidator';
 export * from '../../../shared/countryValidator';
 
-// The Live Data List
-export const COUNTRIES: Country[] = ${JSON.stringify(countries, null, 2)};
+export const COUNTRIES: Country[] = ${JSON.stringify(enrichedCountries, null, 2)};
 `;
 
-    // 4. Write File
+    // Ensure dir exists
+    const dir = path.dirname(TARGET_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
     fs.writeFileSync(TARGET_FILE, fileContent);
-    console.log(`   🎉 SUCCESS: File updated at ${TARGET_FILE}`);
+    console.log(`   💾 Cache saved to disk: ${enrichedCountries.length} countries.`);
+
+    // 4. Return the data (To update Server Memory)
+    return enrichedCountries;
 
   } catch (error: any) {
     console.error('\n❌ SYNC FAILED:', error.message);
+    return null; // Return null so server keeps old cache
   }
 }
 
-syncCountries();
+// Allow running this script manually via CLI
+if (require.main === module) {
+  syncCountries();
+}

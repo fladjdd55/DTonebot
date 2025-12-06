@@ -64,7 +64,7 @@ function handleApiError(error: any, context: string): { error: string, code: str
 export const dtoneService = {
 
   // ----------------------------------------
-  // A. GET COUNTRIES (PAGINATION & TYPE FIX)
+  // A. GET COUNTRIES
   // ----------------------------------------
   async getCountries(serviceId: number = 1): Promise<ApiResponse<Country[]>> {
     if (!serviceId || serviceId <= 0) {
@@ -86,14 +86,11 @@ export const dtoneService = {
         });
 
         const raw = response.data || response;
-        
-        // FIX: Ensure list is always an array by extracting data or defaulting to empty array
         const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || [])) as any[];
 
         if (list.length === 0) {
           hasMore = false;
         } else {
-          
           for (const c of list) {
             const iso = c.iso_code || c.isoCode;
             if (iso && c.name) {
@@ -113,8 +110,6 @@ export const dtoneService = {
       }
 
       allCountries.sort((a, b) => a.name.localeCompare(b.name));
-
-      console.log(`[DTOne] ✅ Total Countries Found: ${allCountries.length}`);
       return { success: true, data: allCountries };
 
     } catch (error: any) {
@@ -127,12 +122,14 @@ export const dtoneService = {
   // B. LOOKUP MOBILE NUMBER
   // ----------------------------------------
   async lookupMobileNumber(mobile: string): Promise<ApiResponse<LookupResult>> {
-    if (!validateMobileNumber(mobile)) {
+    const cleanMobile = mobile.replace(/[\s-]/g, '');
+
+    if (!validateMobileNumber(cleanMobile)) {
       return { success: false, error: 'Invalid format', code: 'INVALID_MOBILE' };
     }
 
     try {
-      const response = await dtone.postLookupMobileNumber({ mobile_number: mobile });
+      const response = await dtone.postLookupMobileNumber({ mobile_number: cleanMobile });
       const result = response.data || response;
       const match = (Array.isArray(result) ? result[0] : result) as any;
 
@@ -186,6 +183,8 @@ export const dtoneService = {
            amount = `${dest.amount.min}-${dest.amount.max} ${dest.unit}`;
         }
 
+        const benefits = p.benefits?.map((b: any) => b.type) || [];
+
         return {
           id: p.id,
           name: p.name,
@@ -193,7 +192,9 @@ export const dtoneService = {
           amount,
           currency: dest.unit,
           min: dest.amount?.min || 0,
-          max: dest.amount?.max || 0
+          max: dest.amount?.max || 0,
+          benefits: benefits,
+          subserviceId: p.service?.subservice?.id 
         };
       });
 
@@ -208,8 +209,10 @@ export const dtoneService = {
   // ----------------------------------------
   // D. PURCHASE
   // ----------------------------------------
-  async purchaseProduct(productId: number, mobile: string, amount: number): Promise<ApiResponse<TransactionResult>> {
-    if (!validateMobileNumber(mobile)) {
+  async purchaseProduct(productId: number, mobile: string, amount: number, unit?: string): Promise<ApiResponse<TransactionResult>> {
+    const cleanMobile = mobile.replace(/[\s-]/g, '');
+
+    if (!validateMobileNumber(cleanMobile)) {
       return { success: false, error: 'Invalid mobile number', code: 'INVALID_MOBILE' };
     }
 
@@ -220,12 +223,22 @@ export const dtoneService = {
       const payload: any = {
         external_id: externalId,
         product_id: productId,
-        credit_party_identifier: { mobile_number: mobile },
+        credit_party_identifier: { mobile_number: cleanMobile },
         auto_confirm: true
       };
 
+      // Strict requirement: Only send destination/calculation_mode for Ranged Products
       if (amount > 0) {
-        payload.values = { destination: { amount: amount } };
+        if (!unit) {
+          return { success: false, error: 'Currency unit required for custom amounts', code: 'MISSING_UNIT' };
+        }
+
+        payload.calculation_mode = 'DESTINATION_AMOUNT';
+        payload.destination = {
+          unit_type: 'CURRENCY',
+          unit: unit,
+          amount: amount
+        };
       }
 
       const response = await dtone.postTransactionSync(payload);
@@ -256,7 +269,58 @@ export const dtoneService = {
     const lookup = await dtoneService.lookupMobileNumber(mobile);
     if (!lookup.success) return lookup; 
 
-    console.log(`[DTOne] ➡️  Operator: ${lookup.data.operatorName}`);
+    console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
     return await dtoneService.purchaseProduct(productId, mobile, amount);
+  },
+
+  // ----------------------------------------
+  // F. GET ALL OPERATORS (FOR CACHE)
+  // ----------------------------------------
+  async getAllOperators(serviceId: number = 1): Promise<ApiResponse<any[]>> {
+    console.log(`[DTOne] 🔄 Fetching ALL Operators (Service ${serviceId})...`);
+    
+    try {
+      let page = 1;
+      let allOperators: any[] = [];
+      let hasMore = true;
+
+      while (hasMore) {
+        const response = await dtone.getOperators({
+          service_id: serviceId,
+          page: page,
+          per_page: 100
+        });
+
+        const raw = response.data || response;
+        const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || [])) as any[];
+
+        if (list.length === 0) {
+          hasMore = false;
+        } else {
+          // Map to relevant fields to keep cache lightweight
+          const simplified = list.map(op => ({
+            id: op.id,
+            name: op.name,
+            countryCode: op.country?.iso_code,
+            regions: op.regions
+          }));
+
+          allOperators = [...allOperators, ...simplified];
+          
+          if (list.length < 100) {
+             hasMore = false;
+          } else {
+             page++;
+          }
+        }
+      }
+
+      console.log(`[DTOne] ✅ Cached ${allOperators.length} operators.`);
+      return { success: true, data: allOperators };
+
+    } catch (error: any) {
+      const err = handleApiError(error, 'Get Operators');
+      return { success: false, error: err.error, code: err.code };
+    }
   }
 };
