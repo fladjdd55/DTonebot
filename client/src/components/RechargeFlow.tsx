@@ -2,11 +2,11 @@ import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, Check, AlertCircle, Phone, Loader2, Wifi, CreditCard } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 import type { CountryCode } from 'libphonenumber-js';
+import { getAllCountries, filterCountries } from '../shared/countryValidator';
 
 // Import the hook to fetch data asynchronously (The correct data source)
 import { useCountries } from '../hooks/useCountries'; 
 // Import validator logic (We assume the functions now accept the country list)
-import { filterCountries, validatePhoneNumber, formatPhoneNumber, extractDigits, type PhoneValidationResult } from '../validators/phoneValidator';
 import type { Country } from '../shared/countryValidator'; // Use the Country type
 import { rechargeApi } from '../services/api';
 

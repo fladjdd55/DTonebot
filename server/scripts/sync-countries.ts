@@ -4,7 +4,7 @@ import path from 'path';
 // CONFIGURATION
 const API_URL = 'http://localhost:5000/api/countries';
 // This resolves to: root/client/src/shared/countryValidator.ts
-const TARGET_FILE = path.join(__dirname, '../../src/shared/countryValidator.ts');
+const TARGET_FILE = path.join(__dirname, '../../client/src/shared/countryValidator.ts');
 
 async function syncCountries() {
   console.log('\n🔄 SYNCING MOBILE-SUPPORTED COUNTRIES...');
@@ -27,13 +27,16 @@ async function syncCountries() {
     }
 
     const countries = await response.json();
-    console.log(`   ✅ API returned ${countries.length} countries.`);
-
-    if (countries.length === 0) {
-      console.warn("   ⚠️  WARNING: Received 0 countries. Check if server/dtone.ts is parsing keys correctly.");
+    
+    // SAFETY CHECK: Abort if list is empty to avoid breaking the app
+    if (!Array.isArray(countries) || countries.length === 0) {
+      throw new Error('Received 0 countries from API. Aborting sync to preserve existing data.');
     }
 
+    console.log(`   ✅ API returned ${countries.length} countries.`);
+
     // 3. Generate File Content
+    // UPDATED: Functions now accept the 'countries' array as the first argument
     const fileContent = `/**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Service ID 1)
@@ -50,22 +53,43 @@ export interface Country {
 
 export const COUNTRIES: Country[] = ${JSON.stringify(countries, null, 2)};
 
-export const getAllCountries = (): Country[] => {
-  return [...COUNTRIES].sort((a, b) => a.name.localeCompare(b.name));
+/**
+ * Returns all countries, sorted by name.
+ * Accepts the live list as an argument (defaults to static list).
+ */
+export const getAllCountries = (countries: Country[] = COUNTRIES): Country[] => {
+  return [...countries].sort((a, b) => a.name.localeCompare(b.name));
 };
 
-export const filterCountries = (query: string): Country[] => {
-  if (!query) return getAllCountries();
+/**
+ * Filters the list of countries based on a search query.
+ * Accepts the live list as the first argument to avoid "toLowerCase" crashes.
+ */
+export const filterCountries = (countries: Country[], query: string): Country[] => {
+  // Safety check
+  const list = countries || [];
+  
+  if (!query) return getAllCountries(list);
+  
   const term = query.toLowerCase();
-  return COUNTRIES.filter(c =>
+  return list.filter(c =>
     c.name.toLowerCase().includes(term) ||
     c.code.toLowerCase().includes(term) ||
     c.dialCode.includes(term)
   );
 };
 
-export const getCountryByCode = (code: string) => COUNTRIES.find(c => c.code === code);
-export const isCountrySupported = (code: string) => COUNTRIES.some(c => c.code === code);
+/**
+ * Finds a country by its ISO2 code.
+ */
+export const getCountryByCode = (countries: Country[], code: string) => 
+  countries.find(c => c.code === code);
+
+/**
+ * Checks if a country code is supported.
+ */
+export const isCountrySupported = (countries: Country[], code: string) => 
+  countries.some(c => c.code === code);
 `;
 
     // 4. Write File

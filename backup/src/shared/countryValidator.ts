@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Service ID 1)
- * Timestamp: 2025-12-06T05:59:15.844Z
+ * Timestamp: 2025-12-06T05:29:36.257Z
  * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 
@@ -951,40 +951,19 @@ export const COUNTRIES: Country[] = [
   }
 ];
 
-/**
- * Returns all countries, sorted by name.
- * Accepts the live list as an argument (defaults to static list).
- */
-export const getAllCountries = (countries: Country[] = COUNTRIES): Country[] => {
-  return [...countries].sort((a, b) => a.name.localeCompare(b.name));
+export const getAllCountries = (): Country[] => {
+  return [...COUNTRIES].sort((a, b) => a.name.localeCompare(b.name));
 };
 
-/**
- * Filters the list of countries based on a search query.
- * Accepts the live list as the first argument to avoid "toLowerCase" crashes.
- */
-export const filterCountries = (countries: Country[], query: string): Country[] => {
-  // Safety check
-  const list = countries || [];
-  
-  if (!query) return getAllCountries(list);
-  
+export const filterCountries = (query: string): Country[] => {
+  if (!query) return getAllCountries();
   const term = query.toLowerCase();
-  return list.filter(c =>
+  return COUNTRIES.filter(c =>
     c.name.toLowerCase().includes(term) ||
     c.code.toLowerCase().includes(term) ||
     c.dialCode.includes(term)
   );
 };
 
-/**
- * Finds a country by its ISO2 code.
- */
-export const getCountryByCode = (countries: Country[], code: string) => 
-  countries.find(c => c.code === code);
-
-/**
- * Checks if a country code is supported.
- */
-export const isCountrySupported = (countries: Country[], code: string) => 
-  countries.some(c => c.code === code);
+export const getCountryByCode = (code: string) => COUNTRIES.find(c => c.code === code);
+export const isCountrySupported = (code: string) => COUNTRIES.some(c => c.code === code);

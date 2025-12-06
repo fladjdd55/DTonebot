@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import { getCountryCallingCode, CountryCode } from 'libphonenumber-js';
+import isoCountries from 'i18n-iso-countries';
 // @ts-ignore
 import { dtoneService } from './dtone';
 
@@ -23,31 +24,36 @@ app.get('/api/countries', async (req: Request, res: Response): Promise<any> => {
     }
 
     // 2. Enrich with Dial Codes
-    // The service returns objects with { iso_code, name }
     const rawCountries = apiResponse.data as any[];
     
     const enrichedCountries = rawCountries.map((c) => {
       let dialCode = '';
-      // Ensure we have a valid ISO string
-      const isoUpper = (c.iso_code || '').toUpperCase() as CountryCode;
+      const iso3 = (c.iso_code || '').toUpperCase();
+      
+      // Convert ISO Alpha-3 (USA) to ISO Alpha-2 (US)
+      // libphonenumber-js strictly requires 2-letter codes
+      const iso2 = isoCountries.alpha3ToAlpha2(iso3) as CountryCode;
 
-      try {
-        dialCode = `+${getCountryCallingCode(isoUpper)}`;
-      } catch (e) {
-        // Ignore countries with no standard dial code
+      if (iso2) {
+        try {
+          dialCode = `+${getCountryCallingCode(iso2)}`;
+        } catch (e) {
+          // Ignore countries with no standard dial code or invalid conversion
+        }
       }
 
       return {
         name: c.name,
-        code: c.iso_code,      // ISO2
-        iso3: c.iso_code,      // Fallback ISO3
+        code: iso2 || iso3,    // Prefer ISO2 for frontend flags/validation
+        iso3: iso3,
         dialCode: dialCode
       };
     });
 
-    // 3. Filter invalid
+    // 3. Filter invalid (only keep ones where we successfully found a dial code)
     const validCountries = enrichedCountries.filter(c => c.dialCode !== '');
 
+    console.log(`[API] Returning ${validCountries.length} valid countries (filtered from ${rawCountries.length})`);
     return res.json(validCountries);
 
   } catch (error: any) {
@@ -56,12 +62,8 @@ app.get('/api/countries', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ... (Your other routes: Lookup, Products, Purchase) ...
-// (Keep them exactly as they were)
+// ... (Rest of your routes: Lookup, Products, Purchase stay the same) ...
 
-// ==================================================================
-// ROUTE 2: LOOKUP
-// ==================================================================
 app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   const { mobile } = req.body;
   if (!mobile) return res.status(400).json({ error: 'Mobile number is required' });
@@ -77,9 +79,6 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ==================================================================
-// ROUTE 3: PRODUCTS
-// ==================================================================
 app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
   const { operatorId } = req.body;
   if (!operatorId) return res.status(400).json({ error: 'Operator ID is required' });
@@ -95,9 +94,6 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ==================================================================
-// ROUTE 4: PURCHASE
-// ==================================================================
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   const { productId, mobile, amount } = req.body;
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
