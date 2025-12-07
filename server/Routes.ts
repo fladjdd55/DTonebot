@@ -45,7 +45,6 @@ setInterval(() => {
 // API ROUTES
 // ==================================================================
 
-// FIX: Rename 'req' to '_req' to ignore unused variable
 app.get('/api/countries', (_req: Request, res: Response): any => {
   return res.json(COUNTRY_CACHE);
 });
@@ -117,8 +116,8 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 // ==================================================================
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// FIX: Rename 'req' to '_req'
-app.get('*', (_req: Request, res: Response) => {
+// FIX: Use Regex (/(.*)/) instead of '*' for Express 5 compatibility
+app.get(/(.*)/, (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
