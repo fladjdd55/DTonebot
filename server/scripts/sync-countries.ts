@@ -1,78 +1,85 @@
+
 import fs from 'fs';
 import path from 'path';
+import { getCountryCallingCode, CountryCode } from 'libphonenumber-js';
+import isoCountries from 'i18n-iso-countries';
+import { dtoneService } from '../dtone';
 
-// 🚀 DYNAMIC PORT: Reads from environment or defaults to 5000
-const PORT = process.env.PORT || 5000;
-const API_URL = `http://localhost:${PORT}/api/countries`;
-
+// Target: client/src/shared/countryValidator.ts
 const TARGET_FILE = path.join(__dirname, '../../client/src/shared/countryValidator.ts');
 
-async function syncCountries() {
-  console.log('\n🔄 SYNCING MOBILE-SUPPORTED COUNTRIES...');
-  console.log(`   Source: ${API_URL}`);
-  
+export async function syncCountries() {
+  console.log('\n🔄 [Cache] Starting Daily Sync...');
+
   try {
-    const dir = path.dirname(TARGET_FILE);
-    if (!fs.existsSync(dir)) {
-      console.log(`   📂 Creating directory: ${dir}`);
-      fs.mkdirSync(dir, { recursive: true });
+    // 1. Fetch RAW data from DTOne Service directly
+    const apiResponse = await dtoneService.getCountries(1);
+
+    if (!apiResponse.success || !apiResponse.data) {
+      throw new Error(apiResponse.error || 'Failed to fetch from DTOne');
     }
 
-    const response = await fetch(API_URL);
-    
-    if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+    const rawCountries = apiResponse.data;
+
+    // 2. Enrich Data (Add Dial Codes & Clean ISOs)
+    const enrichedCountries = rawCountries.map((c) => {
+      let dialCode = '';
+      const iso3 = (c.iso_code || '').toUpperCase();
+
+      const iso2 = isoCountries.alpha3ToAlpha2(iso3) as CountryCode;
+
+      if (iso2) {
+        try {
+          dialCode = `+${getCountryCallingCode(iso2)}`;
+        } catch (e) {
+          // Ignore
+        }
+      }
+
+      if (!c.name || !iso3) return null;
+
+      return {
+        name: c.name,
+        code: iso2 || iso3,
+        iso3: iso3,
+        dialCode: dialCode
+      };
+    }).filter(c => c !== null && c.dialCode !== '');
+
+    if (enrichedCountries.length === 0) {
+      throw new Error('No valid countries found. Aborting.');
     }
 
-    const countries = await response.json();
-    console.log(`   ✅ API returned ${countries.length} countries.`);
-
+    // 3. Write to File (Persistent Cache for Frontend)
     const fileContent = `/**
  * AUTO-GENERATED FILE
- * Source: DTOne API (Service ID 1)
+ * Source: DTOne API (Cached)
  * Timestamp: ${new Date().toISOString()}
  * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 
-export interface Country {
-  name: string;
-  code: string;     // ISO2
-  iso3: string;     // ISO3
-  dialCode: string;
-}
+import { Country } from '../../../shared/countryValidator';
+export * from '../../../shared/countryValidator';
 
-export const COUNTRIES: Country[] = ${JSON.stringify(countries, null, 2)};
-
-export const getAllCountries = (): Country[] => {
-  return [...COUNTRIES].sort((a, b) => a.name.localeCompare(b.name));
-};
-
-export const filterCountries = (query: string): Country[] => {
-  if (!query) return getAllCountries();
-  const term = query.toLowerCase();
-  return COUNTRIES.filter(c =>
-    c.name.toLowerCase().includes(term) ||
-    c.code.toLowerCase().includes(term) ||
-    c.dialCode.includes(term)
-  );
-};
-
-export const getCountryByCode = (code: string) => COUNTRIES.find(c => c.code === code);
-export const isCountrySupported = (code: string) => COUNTRIES.some(c => c.code === code);
+export const COUNTRIES: Country[] = ${JSON.stringify(enrichedCountries, null, 2)};
 `;
 
+    const dir = path.dirname(TARGET_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
     fs.writeFileSync(TARGET_FILE, fileContent);
-    console.log(`   🎉 SUCCESS: File updated at ${TARGET_FILE}`);
+    console.log(`   💾 Cache saved to disk: ${enrichedCountries.length} countries.`);
+
+    // 4. RETURN DATA (Fixes the "void" error in Routes.ts)
+    return enrichedCountries;
 
   } catch (error: any) {
     console.error('\n❌ SYNC FAILED:', error.message);
+    return null;
   }
 }
 
-// Allow standalone run
+// Allow standalone execution
 if (require.main === module) {
   syncCountries();
 }
-
-// Export for Routes.ts
-export { syncCountries };

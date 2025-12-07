@@ -9,8 +9,8 @@ export async function syncOperators() {
   console.log('\n🔄 [Cache] Starting Daily Operator Sync...');
   
   try {
-    // 1. Fetch all operators from DTOne
-    const apiResponse = await dtoneService.getAllOperators(1); // Service 1 = Mobile
+    // 1. Fetch all operators
+    const apiResponse = await dtoneService.getAllOperators(1); 
 
     if (!apiResponse.success || !apiResponse.data) {
       throw new Error(apiResponse.error || 'Failed to fetch operators');
@@ -19,7 +19,7 @@ export async function syncOperators() {
     const operators = apiResponse.data;
     console.log(`   ✅ Retrieved ${operators.length} operators.`);
 
-    // 2. Generate File Content with STRICT TYPES
+    // 2. Generate File Content
     const fileContent = `/**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
@@ -36,7 +36,7 @@ export interface Operator {
   id: number;
   name: string;
   countryCode: string;
-  regions: Region[] | null; // 👈 Strict type instead of 'any'
+  regions: Region[] | null;
 }
 
 export const OPERATORS: Operator[] = ${JSON.stringify(operators, null, 2)};
@@ -50,13 +50,13 @@ export const getOperatorById = (id: number) => {
 };
 `;
 
-    // 3. Write to File
     const dir = path.dirname(TARGET_FILE);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 
     fs.writeFileSync(TARGET_FILE, fileContent);
     console.log(`   💾 Operator cache saved to: ${TARGET_FILE}`);
 
+    // 4. RETURN DATA
     return operators;
 
   } catch (error: any) {
@@ -65,7 +65,6 @@ export const getOperatorById = (id: number) => {
   }
 }
 
-// Allow standalone execution
 if (require.main === module) {
   syncOperators();
 }
