@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Check, AlertCircle, Phone, Loader2, Wifi, CreditCard, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
+import { Search, Check, AlertCircle, Phone, Loader2, Wifi, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 import type { CountryCode } from 'libphonenumber-js';
 
@@ -42,7 +42,7 @@ export default function RechargeFlow() {
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
-  const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.code);
+  const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.iso3);
 
   // --- FILTERING LOGIC ---
   const filteredCountries = useMemo(() => {

@@ -51,7 +51,7 @@ export default function RechargeForm() {
 
     setLoading(true);
     try {
-      const txn = await rechargeApi.purchase(product.id, mobile, amount);
+      const txn = await rechargeApi.purchase(product.id, mobile, amount, product.currency);
       setResult(txn);
       setStep(3); // Move to success screen
     } catch (err: any) {

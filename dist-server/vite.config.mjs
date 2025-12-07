@@ -1,3 +1,4 @@
+"use strict";
 // vite.config.mts
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';

@@ -1,4 +1,3 @@
-import React from 'react';
 import RechargeFlow from '../../components/RechargeFlow';
 
 export default function RechargePage() {

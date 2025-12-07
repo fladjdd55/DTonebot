@@ -3,13 +3,14 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
 
-// 🚀 DYNAMIC URL
+// 🚀 DYNAMIC URL (Fixed: Was hardcoded in fetch below)
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-// 🔑 Load from Environment Variable (Vite)
+
+// 🔑 Load from Environment Variable
 const STRIPE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '';
 
 if (!STRIPE_KEY) {
-  console.error("⚠️ Stripe Publishable Key is missing! Please add VITE_STRIPE_PUBLISHABLE_KEY to your .env file.");
+  console.error("⚠️ Stripe Publishable Key is missing! Check your .env file.");
 }
 
 const stripePromise = loadStripe(STRIPE_KEY);
@@ -34,23 +35,33 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
     if (!stripe || !elements) return;
 
     setIsProcessing(true);
+    setMessage(null);
 
-    const { error, paymentIntent } = await stripe.confirmPayment({
-      elements,
-      confirmParams: {
-        // We handle the redirect manually or don't redirect at all for SPAs
-        return_url: window.location.href, 
-      },
-      redirect: 'if_required', // Important: Prevents redirect if not needed (e.g. credit cards)
-    });
+    try {
+      const { error, paymentIntent } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: window.location.href, 
+        },
+        redirect: 'if_required', 
+      });
 
-    if (error) {
-      setMessage(error.message || 'Payment failed');
-      setIsProcessing(false);
-    } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-      onSuccess(); // Trigger the actual Top-up
-    } else {
-      setMessage('Unexpected state');
+      if (error) {
+        // Payment failed or was canceled
+        setMessage(error.message || 'Payment failed');
+        setIsProcessing(false);
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        // Payment succeeded
+        onSuccess();
+        // Note: We don't setIsProcessing(false) here because the modal usually closes immediately
+      } else {
+        // Unexpected status (e.g., processing, requires_capture)
+        setMessage(`Payment status: ${paymentIntent?.status}`);
+        setIsProcessing(false);
+      }
+    } catch (err: any) {
+      console.error("Payment Error:", err);
+      setMessage('An unexpected error occurred. Please try again.');
       setIsProcessing(false);
     }
   };
@@ -81,14 +92,17 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
 
   useEffect(() => {
     if (isOpen && amount > 0) {
-      // Fetch the secret when modal opens
-      fetch('http://localhost:5000/api/create-payment-intent', {
+      // ✅ FIX: Use dynamic BASE_URL instead of hardcoded localhost
+      fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount, currency }),
       })
         .then((res) => res.json())
-        .then((data) => setClientSecret(data.clientSecret))
+        .then((data) => {
+          if (data.error) throw new Error(data.error);
+          setClientSecret(data.clientSecret);
+        })
         .catch((err) => console.error('Payment Intent Error:', err));
     }
   }, [isOpen, amount, currency]);
@@ -97,12 +111,8 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
 
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      {/* UPDATED CONTAINER CLASSES:
-          - max-h-[90vh]: Limits height to 90% of viewport
-          - flex flex-col: Allows splitting header and body
-      */}
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] flex flex-col">
-        {/* Header (Fixed) */}
+        {/* Header */}
         <div className="bg-gray-50 p-4 flex justify-between items-center border-b shrink-0">
           <div>
             <h3 className="font-bold text-gray-800">Secure Payment</h3>
@@ -113,7 +123,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
           </button>
         </div>
 
-        {/* Body (Scrollable) */}
+        {/* Body */}
         <div className="p-6 overflow-y-auto">
           <div className="mb-6 text-center">
             <span className="text-3xl font-bold text-gray-900">

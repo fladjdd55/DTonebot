@@ -4,11 +4,11 @@
   "version": "0.0.0",
   "scripts": {
     "dev": "vite",
-    "dev:server": "ts-node -P tsconfig.node.json server/Routes.ts",
+    "dev:server": "ts-node -P tsconfig.server.json server/Routes.ts",
     "build": "tsc -b && vite build",
-    "build:server": "tsc -p tsconfig.node.json",
+    "build:server": "tsc -p tsconfig.server.json",
     "build:all": "npm run build:server && npm run build",
-    "start": "node server/Routes.js",
+    "start": "node dist-server/Routes.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
@@ -24,6 +24,8 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
+    "@stripe/react-stripe-js": "^5.4.1",
+    "@stripe/stripe-js": "^8.5.3",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "^24.10.1",
@@ -46,6 +48,7 @@
     "stripe": "^20.0.0",
     "tailwindcss": "^3.4.18",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "~5.9.3",
     "typescript-eslint": "^8.46.4",
     "vite": "^7.2.4"

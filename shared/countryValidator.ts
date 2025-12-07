@@ -22,6 +22,7 @@ export const filterCountries = (countries: Country[], query: string): Country[] 
   return list.filter(c =>
     c.name.toLowerCase().includes(term) ||
     c.code.toLowerCase().includes(term) ||
+    c.iso3.toLowerCase().includes(term) ||
     c.dialCode.includes(term)
   );
 };

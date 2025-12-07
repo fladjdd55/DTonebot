@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "types": ["vite/client"],
     // 💡 KEY CHANGE: Enabling 'strict' prevents implicit 'any' usage (TS7006)
     "strict": true, 
     

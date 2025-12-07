@@ -2,22 +2,10 @@
   "compilerOptions": {
     "composite": true,
     "skipLibCheck": true,
-    "module": "CommonJS",
-    "moduleResolution": "Node",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true,
-    "esModuleInterop": true,
-    "strict": true,
-    "resolveJsonModule": true,
-    "baseUrl": ".",
-    "outDir": "./dist",
-    "rootDir": "."
+    "strict": true
   },
-  "include": ["vite.config.mts", "server/**/*.ts", "shared/**/*.ts"],
-  "exclude": ["node_modules", "dist"],
-  "ts-node": {
-    "compilerOptions": {
-      "module": "CommonJS",
-      "moduleResolution": "Node"
-    }
-  }
+  "include": ["vite.config.mts"]
 }
