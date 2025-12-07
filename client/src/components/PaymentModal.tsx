@@ -3,7 +3,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
 
-// 🚀 DYNAMIC URL (Fixed: Was hardcoded in fetch below)
+// 🚀 DYNAMIC URL
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 // 🔑 Load from Environment Variable
@@ -47,15 +47,11 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
       });
 
       if (error) {
-        // Payment failed or was canceled
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        // Payment succeeded
         onSuccess();
-        // Note: We don't setIsProcessing(false) here because the modal usually closes immediately
       } else {
-        // Unexpected status (e.g., processing, requires_capture)
         setMessage(`Payment status: ${paymentIntent?.status}`);
         setIsProcessing(false);
       }
@@ -89,21 +85,38 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
 
 export default function PaymentModal({ isOpen, onClose, onSuccess, amount, currency }: PaymentModalProps) {
   const [clientSecret, setClientSecret] = useState('');
+  const [initError, setInitError] = useState('');
 
   useEffect(() => {
-    if (isOpen && amount > 0) {
-      // ✅ FIX: Use dynamic BASE_URL instead of hardcoded localhost
+    if (isOpen) {
+      // Reset state when modal opens
+      setClientSecret('');
+      setInitError('');
+
+      // 1. Validation Check
+      if (!amount || amount <= 0 || isNaN(amount)) {
+        setInitError("Invalid amount to charge. Please try a different product.");
+        return;
+      }
+
+      // 2. Create Payment Intent
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ amount, currency }),
       })
-        .then((res) => res.json())
+        .then(async (res) => {
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Failed to initialize payment');
+          return data;
+        })
         .then((data) => {
-          if (data.error) throw new Error(data.error);
           setClientSecret(data.clientSecret);
         })
-        .catch((err) => console.error('Payment Intent Error:', err));
+        .catch((err) => {
+          console.error('Payment Intent Error:', err);
+          setInitError(err.message || "Could not connect to payment server.");
+        });
     }
   }, [isOpen, amount, currency]);
 
@@ -127,17 +140,26 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
         <div className="p-6 overflow-y-auto">
           <div className="mb-6 text-center">
             <span className="text-3xl font-bold text-gray-900">
-              {amount} <span className="text-lg text-gray-500">{currency}</span>
+              {amount || 0} <span className="text-lg text-gray-500">{currency}</span>
             </span>
           </div>
 
+          {/* Logic to show Form, Spinner, or Error */}
           {clientSecret ? (
             <Elements options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
               <CheckoutForm onSuccess={onSuccess} />
             </Elements>
+          ) : initError ? (
+            <div className="flex flex-col items-center justify-center py-6 text-center text-red-600 space-y-2">
+              <AlertCircle className="w-10 h-10" />
+              <p className="font-medium">Payment Unavailable</p>
+              <p className="text-sm text-gray-500">{initError}</p>
+              <button onClick={onClose} className="mt-4 text-indigo-600 text-sm hover:underline">Close</button>
+            </div>
           ) : (
-            <div className="flex justify-center py-10">
+            <div className="flex flex-col items-center justify-center py-10 space-y-4">
               <Loader2 className="w-8 h-8 animate-spin text-indigo-600" />
+              <p className="text-sm text-gray-400">Initializing secure checkout...</p>
             </div>
           )}
         </div>

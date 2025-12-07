@@ -101,6 +101,11 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   const { productId, mobile, amount, unit } = req.body;
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
   try {
+    // Read the public URL from .env
+    const callbackUrl = process.env.DTONE_CALLBACK_URL
+      ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
+      : undefined;
+
     const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit);
     if (!result.success) {
       return res.status(400).json({ error: result.error, code: result.code });
@@ -119,6 +124,23 @@ app.use(express.static(path.join(__dirname, '../dist')));
 // FIX: Use Regex (/(.*)/) instead of '*' for Express 5 compatibility
 app.get(/(.*)/, (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
+});
+
+// ==================================================================
+// 🔔 DTONE CALLBACK (WEBHOOK)
+// ==================================================================
+app.post('/api/callback', (req: Request, res: Response) => {
+  const transaction = req.body;
+
+  console.log('\n🔔 [DTOne Hook] Transaction Update Received:');
+  console.log(`   ID: ${transaction.id}`);
+  console.log(`   Ref: ${transaction.external_id}`);
+  console.log(`   Status: ${transaction.status?.message} (${transaction.status?.class?.message})`);
+
+  // TODO: Update your database here using transaction.external_id
+
+  // Always respond with 200 OK to acknowledge receipt
+  res.status(200).send('OK');
 });
 
 app.listen(PORT, () => {

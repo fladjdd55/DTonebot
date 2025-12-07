@@ -209,7 +209,7 @@ export const dtoneService = {
   // ----------------------------------------
   // D. PURCHASE
   // ----------------------------------------
-  async purchaseProduct(productId: number, mobile: string, amount: number, unit?: string): Promise<ApiResponse<TransactionResult>> {
+  async purchaseProduct(productId: number, mobile: string, amount: number, unit?: string, callbackUrl?: string): Promise<ApiResponse<TransactionResult>> {
     const cleanMobile = mobile.replace(/[\s-]/g, '');
 
     if (!validateMobileNumber(cleanMobile)) {
@@ -224,7 +224,8 @@ export const dtoneService = {
         external_id: externalId,
         product_id: productId,
         credit_party_identifier: { mobile_number: cleanMobile },
-        auto_confirm: true
+        auto_confirm: true,
+	callback_url: callbackUrl
       };
 
       // Strict requirement: Only send destination/calculation_mode for Ranged Products
