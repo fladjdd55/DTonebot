@@ -1,10 +1,14 @@
+import Stripe from 'stripe';
 export declare const paymentService: {
     /**
-     * Creates a Payment Intent for the Stripe Elements sheet
-     * @param amount Amount in standard units (e.g., 10.50)
-     * @param currency Currency code (e.g., 'USD')
+     * Creates a Payment Intent and returns ID + Secret
      */
     createPaymentIntent(amount: number, currency: string): Promise<{
         clientSecret: string | null;
+        id: string;
     }>;
+    /**
+     * Refunds a payment if DTOne transaction fails
+     */
+    refundPayment(paymentIntentId: string): Promise<Stripe.Response<Stripe.Refund> | null>;
 };

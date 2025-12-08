@@ -248,10 +248,13 @@ app.post('/api/callback', async (req: Request, res: Response) => {
 // ==================================================================
 // 📂 SERVE REACT FRONTEND (MUST BE LAST)
 // ==================================================================
-app.use(express.static(path.join(__dirname, '../dist')));
+// ✅ FIX: Use process.cwd() to always find the 'dist' folder at project root
+const DIST_PATH = path.join(process.cwd(), 'dist');
+
+app.use(express.static(DIST_PATH));
 
 app.get(/(.*)/, (_req: Request, res: Response) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+  res.sendFile(path.join(DIST_PATH, 'index.html'));
 });
 
 app.listen(Number(PORT), '0.0.0.0', () => {

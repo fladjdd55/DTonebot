@@ -47,13 +47,11 @@ if (!process.env.STRIPE_SECRET_KEY) {
     console.warn("⚠️  STRIPE_SECRET_KEY is missing in .env");
 }
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
-    apiVersion: '2023-10-16', // Use latest version
+    apiVersion: '2023-10-16',
 });
 exports.paymentService = {
     /**
-     * Creates a Payment Intent for the Stripe Elements sheet
-     * @param amount Amount in standard units (e.g., 10.50)
-     * @param currency Currency code (e.g., 'USD')
+     * Creates a Payment Intent and returns ID + Secret
      */
     createPaymentIntent: function (amount, currency) {
         return __awaiter(this, void 0, void 0, function () {
@@ -74,11 +72,39 @@ exports.paymentService = {
                         paymentIntent = _a.sent();
                         return [2 /*return*/, {
                                 clientSecret: paymentIntent.client_secret,
+                                id: paymentIntent.id // 👈 Sending ID to frontend
                             }];
                     case 2:
                         error_1 = _a.sent();
                         console.error('Stripe Error:', error_1.message);
                         throw new Error(error_1.message);
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    },
+    /**
+     * Refunds a payment if DTOne transaction fails
+     */
+    refundPayment: function (paymentIntentId) {
+        return __awaiter(this, void 0, void 0, function () {
+            var refund, error_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        console.log("[Stripe] \uD83D\uDCB8 Attempting refund for ".concat(paymentIntentId, "..."));
+                        return [4 /*yield*/, stripe.refunds.create({
+                                payment_intent: paymentIntentId,
+                            })];
+                    case 1:
+                        refund = _a.sent();
+                        console.log("[Stripe] \u2705 Refund successful: ".concat(refund.id));
+                        return [2 /*return*/, refund];
+                    case 2:
+                        error_2 = _a.sent();
+                        console.error('[Stripe] ❌ Refund Failed:', error_2.message);
+                        return [2 /*return*/, null];
                     case 3: return [2 /*return*/];
                 }
             });

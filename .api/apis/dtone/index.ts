@@ -1,16 +1,17 @@
 import type * as types from './types';
-import type { ConfigOptions, FetchResponse } from 'api/dist/core'
+import type { ConfigOptions, FetchResponse } from 'api/dist/core/index.js'
 import Oas from 'oas';
-import APICore from 'api/dist/core';
-import definition from './openapi.json';
+import APICore from 'api/dist/core/index.js';
+// @ts-ignore
+import definition from './openapi.json' with { type: 'json' };
 
 class SDK {
   spec: Oas;
   core: APICore;
 
   constructor() {
-    this.spec = Oas.init(definition);
-    this.core = new APICore(this.spec, 'dtone/1.22.0 (api/6.1.3)');
+    this.spec = new (Oas as any).default(definition as any);
+    this.core = new (APICore as any).default(this.spec, 'dtone/1.22.0 (api/6.1.3)');
   }
 
   /**

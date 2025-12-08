@@ -1,4 +1,15 @@
 "use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -46,6 +57,7 @@ var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
 var payment_1 = require("./payment");
+var db_1 = require("./db");
 var app = (0, express_1.default)();
 var PORT = process.env.PORT || 5000;
 app.use((0, cors_1.default)());
@@ -92,6 +104,19 @@ setInterval(function () {
     (0, sync_operators_1.syncOperators)().then(function (d) { if (d)
         OPERATOR_CACHE = d; });
 }, 1000 * 60 * 60 * 24);
+// ==================================================================
+// 🔢 DTONE STATUS CODES
+// ==================================================================
+var DTONE_STATUS = {
+    CREATED: 1,
+    CONFIRMED: 2,
+    REJECTED: 3,
+    CANCELLED: 4,
+    SUBMITTED: 5,
+    COMPLETED: 7,
+    REVERSED: 8,
+    DECLINED: 9
+};
 // ==================================================================
 // API ROUTES
 // ==================================================================
@@ -181,38 +206,165 @@ app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0,
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, result, error_4;
+    var _a, productId, mobile, amount, unit, paymentId, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit;
+                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId;
                 if (!productId || !mobile)
                     return [2 /*return*/, res.status(400).json({ error: 'Missing fields' })];
                 _b.label = 1;
             case 1:
-                _b.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit)];
+                _b.trys.push([1, 13, , 14]);
+                callbackUrl = process.env.DTONE_CALLBACK_URL
+                    ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/callback")
+                    : undefined;
+                if (callbackUrl)
+                    console.log("[Purchase] Attaching Callback: ".concat(callbackUrl));
+                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, callbackUrl)];
             case 2:
                 result = _b.sent();
-                if (!result.success) {
-                    return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
-                }
-                return [2 /*return*/, res.json(result.data)];
+                if (!(!result.success || !result.data)) return [3 /*break*/, 5];
+                if (!paymentId) return [3 /*break*/, 4];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
             case 3:
+                _b.sent();
+                _b.label = 4;
+            case 4: return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
+            case 5:
+                statusId = result.data.statusId;
+                dbStatus = 'PENDING';
+                if (statusId === DTONE_STATUS.COMPLETED)
+                    dbStatus = 'COMPLETED';
+                if (!(statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED)) return [3 /*break*/, 8];
+                console.error("[Purchase] \u274C Immediate Failure (Code ".concat(statusId, "): ").concat(result.data.status));
+                if (!paymentId) return [3 /*break*/, 7];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 6:
+                _b.sent();
+                dbStatus = 'REFUNDED';
+                return [3 /*break*/, 8];
+            case 7:
+                dbStatus = 'FAILED';
+                _b.label = 8;
+            case 8:
+                ;
+                _b.label = 9;
+            case 9:
+                _b.trys.push([9, 11, , 12]);
+                return [4 /*yield*/, db_1.db.transaction.create({
+                        data: {
+                            externalId: result.data.externalId,
+                            paymentIntentId: paymentId || null,
+                            mobile: mobile,
+                            productId: Number(productId),
+                            amount: Number(amount || 0),
+                            status: dbStatus
+                        }
+                    })];
+            case 10:
+                _b.sent();
+                return [3 /*break*/, 12];
+            case 11:
+                dbError_1 = _b.sent();
+                console.error("[DB] Failed to save transaction:", dbError_1);
+                return [3 /*break*/, 12];
+            case 12: 
+            // 5. Return result with explicit success flag
+            // 🛑 CRITICAL FIX: This tells the frontend it failed!
+            return [2 /*return*/, res.json(__assign(__assign({}, result.data), { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }))];
+            case 13:
                 error_4 = _b.sent();
                 return [2 /*return*/, res.status(500).json({ error: error_4.message })];
-            case 4: return [2 /*return*/];
+            case 14: return [2 /*return*/];
+        }
+    });
+}); });
+// ==================================================================
+// 🔔 DTONE CALLBACK (WEBHOOK)
+// ==================================================================
+app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var txn, statusId, statusMsg, refId, existingTx, newStatus, _a, e_2;
+    var _b, _c, _d, _e, _f;
+    return __generator(this, function (_g) {
+        switch (_g.label) {
+            case 0:
+                txn = req.body;
+                statusId = (_c = (_b = txn.status) === null || _b === void 0 ? void 0 : _b.class) === null || _c === void 0 ? void 0 : _c.id;
+                statusMsg = ((_d = txn.status) === null || _d === void 0 ? void 0 : _d.message) || 'No details';
+                refId = txn.external_id;
+                console.log("\n\uD83D\uDD14 [Callback] Ref: ".concat(refId, " | Code: ").concat(statusId, " (").concat((_f = (_e = txn.status) === null || _e === void 0 ? void 0 : _e.class) === null || _f === void 0 ? void 0 : _f.message, ")"));
+                _g.label = 1;
+            case 1:
+                _g.trys.push([1, 11, , 12]);
+                return [4 /*yield*/, db_1.db.transaction.findUnique({ where: { externalId: refId } })];
+            case 2:
+                existingTx = _g.sent();
+                if (!existingTx) {
+                    console.warn("   ⚠️ Transaction not found in DB.");
+                    res.status(200).send('OK');
+                    return [2 /*return*/];
+                }
+                // Only update if status has changed (and isn't already final)
+                if (existingTx.status === 'COMPLETED' || existingTx.status === 'REFUNDED') {
+                    res.status(200).send('OK');
+                    return [2 /*return*/];
+                }
+                newStatus = existingTx.status;
+                _a = statusId;
+                switch (_a) {
+                    case DTONE_STATUS.COMPLETED: return [3 /*break*/, 3];
+                    case DTONE_STATUS.REJECTED: return [3 /*break*/, 4];
+                    case DTONE_STATUS.DECLINED: return [3 /*break*/, 4];
+                    case DTONE_STATUS.CANCELLED: return [3 /*break*/, 4];
+                    case DTONE_STATUS.REVERSED: return [3 /*break*/, 4];
+                }
+                return [3 /*break*/, 8];
+            case 3:
+                console.log("   ✅ SUCCESS: Transaction finished successfully.");
+                newStatus = 'COMPLETED';
+                return [3 /*break*/, 9];
+            case 4:
+                console.error("   \u274C FAILED: ".concat(statusMsg));
+                if (!(existingTx.paymentIntentId && existingTx.status !== 'REFUNDED')) return [3 /*break*/, 6];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(existingTx.paymentIntentId)];
+            case 5:
+                _g.sent();
+                newStatus = 'REFUNDED';
+                return [3 /*break*/, 7];
+            case 6:
+                newStatus = 'FAILED';
+                _g.label = 7;
+            case 7: return [3 /*break*/, 9];
+            case 8:
+                console.log("   ⏳ PENDING: Update received.");
+                return [3 /*break*/, 9];
+            case 9: return [4 /*yield*/, db_1.db.transaction.update({
+                    where: { externalId: refId },
+                    data: { status: newStatus }
+                })];
+            case 10:
+                _g.sent();
+                return [3 /*break*/, 12];
+            case 11:
+                e_2 = _g.sent();
+                console.error("Callback Error:", e_2);
+                return [3 /*break*/, 12];
+            case 12:
+                res.status(200).send('OK');
+                return [2 /*return*/];
         }
     });
 }); });
 // ==================================================================
 // 📂 SERVE REACT FRONTEND (MUST BE LAST)
 // ==================================================================
-app.use(express_1.default.static(path_1.default.join(__dirname, '../dist')));
-// FIX: Use Regex (/(.*)/) instead of '*' for Express 5 compatibility
+// ✅ FIX: Use process.cwd() to always find the 'dist' folder at project root
+var DIST_PATH = path_1.default.join(process.cwd(), 'dist');
+app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, function (_req, res) {
-    res.sendFile(path_1.default.join(__dirname, '../dist/index.html'));
+    res.sendFile(path_1.default.join(DIST_PATH, 'index.html'));
 });
-app.listen(PORT, function () {
-    console.log("\uD83D\uDE80 API Server running on port ".concat(PORT));
+app.listen(Number(PORT), '0.0.0.0', function () {
+    console.log("\uD83D\uDE80 API Server running on port ".concat(PORT, " (IPv4)"));
 });

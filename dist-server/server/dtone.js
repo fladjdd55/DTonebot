@@ -269,12 +269,12 @@ exports.dtoneService = {
     // ----------------------------------------
     // D. PURCHASE
     // ----------------------------------------
-    purchaseProduct: function (productId, mobile, amount, unit) {
+    purchaseProduct: function (productId, mobile, amount, unit, callbackUrl) {
         return __awaiter(this, void 0, void 0, function () {
             var cleanMobile, externalId, payload, response, data, error_4, err;
-            var _a, _b;
-            return __generator(this, function (_c) {
-                switch (_c.label) {
+            var _a, _b, _c, _d;
+            return __generator(this, function (_e) {
+                switch (_e.label) {
                     case 0:
                         cleanMobile = mobile.replace(/[\s-]/g, '');
                         if (!validateMobileNumber(cleanMobile)) {
@@ -282,14 +282,15 @@ exports.dtoneService = {
                         }
                         externalId = generateTransactionId();
                         console.log("[DTOne] Purchasing Product ".concat(productId, " [Ref: ").concat(externalId, "]..."));
-                        _c.label = 1;
+                        _e.label = 1;
                     case 1:
-                        _c.trys.push([1, 3, , 4]);
+                        _e.trys.push([1, 3, , 4]);
                         payload = {
                             external_id: externalId,
                             product_id: productId,
                             credit_party_identifier: { mobile_number: cleanMobile },
-                            auto_confirm: true
+                            auto_confirm: true,
+                            callback_url: callbackUrl
                         };
                         // Strict requirement: Only send destination/calculation_mode for Ranged Products
                         if (amount > 0) {
@@ -305,19 +306,20 @@ exports.dtoneService = {
                         }
                         return [4 /*yield*/, dtone_1.default.postTransactionSync(payload)];
                     case 2:
-                        response = _c.sent();
+                        response = _e.sent();
                         data = (response.data || response);
                         return [2 /*return*/, {
                                 success: true,
                                 data: {
                                     id: data.id,
-                                    status: ((_a = data.status) === null || _a === void 0 ? void 0 : _a.message) || data.status,
+                                    statusId: (_b = (_a = data.status) === null || _a === void 0 ? void 0 : _a.class) === null || _b === void 0 ? void 0 : _b.id,
+                                    status: ((_c = data.status) === null || _c === void 0 ? void 0 : _c.message) || data.status,
                                     externalId: data.external_id,
-                                    message: (_b = data.status) === null || _b === void 0 ? void 0 : _b.message
+                                    message: (_d = data.status) === null || _d === void 0 ? void 0 : _d.message
                                 }
                             }];
                     case 3:
-                        error_4 = _c.sent();
+                        error_4 = _e.sent();
                         err = handleApiError(error_4, 'Transaction');
                         return [2 /*return*/, { success: false, error: err.error, code: err.code }];
                     case 4: return [2 /*return*/];

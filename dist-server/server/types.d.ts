@@ -23,10 +23,12 @@ export interface Product {
     min: number;
     max: number;
     subserviceId?: number;
+    benefits?: string[];
 }
 export interface TransactionResult {
     id: number;
     status: string;
+    statusId?: number;
     externalId: string;
     message?: string;
 }
