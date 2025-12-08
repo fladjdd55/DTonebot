@@ -27,12 +27,14 @@ export interface Product {
   currency: string;
   min: number;
   max: number;
-  subserviceId?: number; // 👈 NEW FIELD
+  subserviceId?: number;
+  benefits?: string[]; // Added optional benefits array just in case
 }
 
 export interface TransactionResult {
   id: number;
   status: string;
+  statusId?: number; // 👈 ✅ Added this field
   externalId: string;
   message?: string;
 }

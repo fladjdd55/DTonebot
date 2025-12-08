@@ -11,7 +11,7 @@ export interface Product {
   benefits: string[];
 }
 
-// 🚀 DYNAMIC URL: Uses VITE_API_URL if set, otherwise defaults to localhost:5000
+// 🚀 DYNAMIC URL
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const API_URL = `${BASE_URL}/api`;
 
@@ -38,11 +38,12 @@ export const rechargeApi = {
     return data;
   },
 
-  async purchase(productId: number, mobile: string, amount: number, unit: string) {
+  // ✅ FIX: Added 'paymentId' as the 5th optional parameter
+  async purchase(productId: number, mobile: string, amount: number, unit: string, paymentId?: string) {
     const res = await fetch(`${API_URL}/purchase`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, mobile, amount, unit })
+      body: JSON.stringify({ productId, mobile, amount, unit, paymentId })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');

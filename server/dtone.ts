@@ -249,6 +249,7 @@ export const dtoneService = {
         success: true,
         data: {
           id: data.id,
+	  statusId: data.status?.class?.id,
           status: data.status?.message || data.status,
           externalId: data.external_id,
           message: data.status?.message

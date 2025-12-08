@@ -8,7 +8,7 @@ import { useOperators } from '../hooks/useOperators';
 import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValidationResult } from '../../../shared/phoneValidator'; 
 import { filterCountries, type Country } from '../shared/countryValidator'; 
 import { rechargeApi, type Product } from '../services/api';
-import PaymentModal from './PaymentModal'; // 👈 Payment Component
+import PaymentModal from './PaymentModal';
 
 export default function RechargeFlow() {
   // --- STATE ---
@@ -36,20 +36,22 @@ export default function RechargeFlow() {
   // Manual Selection Mode
   const [showManualSelection, setShowManualSelection] = useState(false);
 
-  // 💳 PAYMENT STATE
+  // PAYMENT STATE
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number} | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
+  
   const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.iso3);
 
   // --- FILTERING LOGIC ---
+
   const filteredCountries = useMemo(() => {
-    return filterCountries(countries, searchQuery);
+    // Ensure 'countries' is passed as the first argument
+    return filterCountries(countries || [], searchQuery || '');
   }, [searchQuery, countries]);
 
-  // Categorize Products
   const categorizedProducts = useMemo(() => {
     return {
       AIRTIME: products.filter(p => p.subserviceId === 11 || !p.subserviceId),
@@ -164,41 +166,50 @@ export default function RechargeFlow() {
     }
   };
 
-  // 🔴 MODIFIED: Opens Payment Modal instead of purchasing directly
+  // ✅ FIX: Correct Amount Parsing
   const handlePurchase = async (product: Product, amount?: number) => {
-    const finalAmount = amount || 0;
+    let finalAmount = amount || 0;
     
-    // Validation for Ranged Products
-    if (product.type === 'RANGED_VALUE_RECHARGE') {
+    // If not ranged (Fixed price), extract amount from string "10 SGD" -> 10
+    if (product.type !== 'RANGED_VALUE_RECHARGE') {
+      const priceString = product.amount.split(' ')[0]; 
+      finalAmount = parseFloat(priceString);
+    } else {
       if (!finalAmount || finalAmount < product.min || finalAmount > product.max) {
         setApiError(`Amount must be between ${product.min} and ${product.max}`);
         return;
       }
     }
 
-    // Save details and open modal
     setPendingTxn({ product, amount: finalAmount });
     setIsPayModalOpen(true);
   };
 
-  // 🟢 NEW: Called ONLY after Stripe Payment is successful
-  const executeTransaction = async () => {
+  // ✅ FIX: Updated to handle immediate backend failure
+  const executeTransaction = async (paymentId?: string) => {
     if (!pendingTxn) return;
     
-    setIsPayModalOpen(false); // Close modal
-    setLoading(true); // Show loading on main screen
+    setIsPayModalOpen(false); 
+    setLoading(true); 
 
     try {
       const result = await rechargeApi.purchase(
         pendingTxn.product.id, 
         validationState?.fullNumber || '', 
         pendingTxn.amount,
-        pendingTxn.product.currency
+        pendingTxn.product.currency,
+        paymentId
       );
+
+      // Check success flag from updated backend
+      if (result.success === false) {
+         throw new Error(result.status || 'Transaction Failed');
+      }
+
       setTxnResult(result);
-      setStep(3); // Go to Success Screen
+      setStep(3); 
     } catch (err: any) {
-      setApiError(err.message);
+      setApiError(err.message || "Transaction failed. A refund has been issued.");
     } finally {
       setLoading(false);
     }
@@ -224,7 +235,6 @@ export default function RechargeFlow() {
     <div className="min-h-screen bg-gray-50 flex justify-center p-4 pt-10">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
-        {/* HEADER */}
         <div className="bg-indigo-600 p-6 text-white relative">
           {(usingFallback || operatorsOffline) && (
             <div className="absolute top-4 right-4 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
@@ -250,7 +260,6 @@ export default function RechargeFlow() {
           {/* === STEP 1: INPUT === */}
           {step === 1 && (
             <div className="space-y-6">
-              {/* Country Selector */}
               <div className="relative" ref={dropdownRef}>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Country</label>
                 <div className="relative">
@@ -294,7 +303,6 @@ export default function RechargeFlow() {
                 )}
               </div>
 
-              {/* Phone Input */}
               <div>
                 <label className="block text-sm font-semibold text-gray-700 mb-2">Phone Number</label>
                 <div className="flex gap-3">
@@ -318,14 +326,12 @@ export default function RechargeFlow() {
                 )}
               </div>
 
-              {/* Action Button */}
               {!showManualSelection && (
                  <button onClick={handleLookupOperator} disabled={loading || !validationState?.valid} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 flex justify-center gap-2">
                    {loading ? <Loader2 className="animate-spin" /> : 'Continue'}
                  </button>
               )}
 
-              {/* MANUAL SELECTION GRID */}
               {showManualSelection && selectedCountry && (
                 <div className="mt-4">
                   <p className="text-sm font-bold text-gray-700 mb-2">Select Operator:</p>
@@ -347,7 +353,6 @@ export default function RechargeFlow() {
                 </div>
               )}
               
-              {/* Manual Toggle Link */}
               {!showManualSelection && selectedCountry && (
                 <div className="text-center mt-2">
                   <button onClick={() => setShowManualSelection(true)} className="text-xs text-indigo-500 hover:underline">
@@ -358,7 +363,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* === STEP 1.5: CONFIRM OPERATOR === */}
           {step === 1.5 && operator && (
             <div className="space-y-6 text-center">
               <div className="bg-indigo-50 p-6 rounded-xl border-2 border-indigo-100">
@@ -394,7 +398,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* === STEP 2: PLANS & TABS === */}
           {step === 2 && operator && (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b pb-4">
@@ -414,7 +417,6 @@ export default function RechargeFlow() {
                 <button onClick={resetFlow} className="text-sm text-blue-600 underline">Change</button>
               </div>
 
-              {/* TABS */}
               <div className="flex bg-gray-100 p-1 rounded-lg">
                 {(['AIRTIME', 'DATA', 'BUNDLES'] as const).map(tab => (
                   <button
@@ -433,11 +435,8 @@ export default function RechargeFlow() {
               </div>
 
               <div className="min-h-[250px]">
-                
-                {/* 1. AIRTIME TAB */}
                 {activeTab === 'AIRTIME' && (
                   <div className="space-y-4">
-                    {/* CUSTOM AMOUNT INPUT */}
                     {rangedProduct && (
                       <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
                         <label className="block text-xs font-bold text-indigo-700 uppercase mb-2">Custom Amount</label>
@@ -463,7 +462,6 @@ export default function RechargeFlow() {
                       </div>
                     )}
 
-                    {/* FIXED AIRTIME LIST - GRID */}
                     <div className="space-y-2">
                       {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE').length > 0 && 
                         <p className="text-xs text-gray-400 font-bold uppercase mt-2">Fixed Amounts</p>
@@ -493,7 +491,6 @@ export default function RechargeFlow() {
                   </div>
                 )}
 
-                {/* 2. DATA & BUNDLES TABS */}
                 {(activeTab === 'DATA' || activeTab === 'BUNDLES') && (
                   <div className="space-y-2 max-h-[300px] overflow-y-auto">
                     {categorizedProducts[activeTab].length === 0 ? (
@@ -522,7 +519,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* === STEP 3: SUCCESS === */}
           {step === 3 && txnResult && (
             <div className="text-center py-8">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -543,16 +539,14 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* 👇 STRIPE PAYMENT MODAL */}
-          {pendingTxn && (
-            <PaymentModal 
-              isOpen={isPayModalOpen}
-              onClose={() => setIsPayModalOpen(false)}
-              onSuccess={executeTransaction}
-              // Parse string amount (e.g. "5000 IDR") or use custom amount
-              amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
-              currency={pendingTxn.product.currency}
-            />
+          {pendingTxn && isPayModalOpen && (
+             <PaymentModal
+               isOpen={isPayModalOpen}
+               onClose={() => setIsPayModalOpen(false)}
+               amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
+               currency={pendingTxn.product.currency}
+               onSuccess={(paymentId?: string) => executeTransaction(paymentId as string)} 
+             />
           )}
 
         </div>

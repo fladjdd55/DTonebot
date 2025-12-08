@@ -1,0 +1,20 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL") // ✅ This is required in Prisma 5
+}
+
+model Transaction {
+  id              String   @id @default(uuid())
+  externalId      String   @unique
+  paymentIntentId String?
+  mobile          String
+  productId       Int
+  amount          Float
+  status          String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}

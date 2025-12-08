@@ -5,6 +5,7 @@ import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 
 import { paymentService } from './payment'; 
+import { db } from './db'; 
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -40,6 +41,20 @@ setInterval(() => {
   syncCountries().then(d => { if(d) COUNTRY_CACHE = d; });
   syncOperators().then(d => { if(d) OPERATOR_CACHE = d; });
 }, 1000 * 60 * 60 * 24);
+
+// ==================================================================
+// 🔢 DTONE STATUS CODES
+// ==================================================================
+const DTONE_STATUS = {
+  CREATED: 1,
+  CONFIRMED: 2,
+  REJECTED: 3,
+  CANCELLED: 4,
+  SUBMITTED: 5,
+  COMPLETED: 7,
+  REVERSED: 8,
+  DECLINED: 9
+};
 
 // ==================================================================
 // API ROUTES
@@ -97,24 +112,140 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
+// ✅ UPDATED PURCHASE ROUTE (With Immediate Refund Logic)
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
-  const { productId, mobile, amount, unit } = req.body;
+  const { productId, mobile, amount, unit, paymentId } = req.body;
+  
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
+
   try {
-    // Read the public URL from .env
-    const callbackUrl = process.env.DTONE_CALLBACK_URL
+    const callbackUrl = process.env.DTONE_CALLBACK_URL 
       ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
       : undefined;
-      console.log(`[Purchase] Sending Callback URL: ${callbackUrl}`);
 
-    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit);
-    if (!result.success) {
+    if (callbackUrl) console.log(`[Purchase] Attaching Callback: ${callbackUrl}`);
+
+    // 1. Execute Purchase
+    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, callbackUrl);
+    
+    // 2. Handle API Level Errors (Network/Auth)
+    if (!result.success || !result.data) {
+      if (paymentId) {
+        console.log(`[Purchase] API Failed. Refunding ${paymentId}...`);
+        await paymentService.refundPayment(paymentId);
+      }
       return res.status(400).json({ error: result.error, code: result.code });
     }
-    return res.json(result.data);
+
+    // 3. Handle Transaction Level Failures (Declined/Rejected)
+    const statusId = result.data.statusId;
+    let dbStatus = 'PENDING';
+    
+    if (statusId === DTONE_STATUS.COMPLETED) dbStatus = 'COMPLETED';
+
+    // If "Declined" or "Rejected", refund immediately!
+    if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
+      console.error(`[Purchase] ❌ Immediate Failure (Code ${statusId}): ${result.data.status}`);
+      if (paymentId) {
+        await paymentService.refundPayment(paymentId);
+        dbStatus = 'REFUNDED';
+      } else {
+        dbStatus = 'FAILED';
+      }
+    }
+
+    // 4. Save to Database
+    try {
+      await db.transaction.create({
+        data: {
+          externalId: result.data.externalId,
+          paymentIntentId: paymentId || null,
+          mobile: mobile,
+          productId: Number(productId),
+          amount: Number(amount || 0),
+          status: dbStatus
+        }
+      });
+    } catch (dbError) {
+      console.error("[DB] Failed to save transaction:", dbError);
+    }
+
+    // 5. Return result with explicit success flag
+    // The frontend will check 'success' to know if it should show the green checkmark
+    return res.json({ 
+      ...result.data, 
+      success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' 
+    });
+
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
+});
+
+// ==================================================================
+// 🔔 DTONE CALLBACK (WEBHOOK)
+// ==================================================================
+app.post('/api/callback', async (req: Request, res: Response) => {
+  const txn = req.body;
+  const statusId = txn.status?.class?.id;
+  const statusMsg = txn.status?.message || 'No details';
+  const refId = txn.external_id;
+
+  console.log(`\n🔔 [Callback] Ref: ${refId} | Code: ${statusId} (${txn.status?.class?.message})`);
+
+  try {
+    const existingTx = await db.transaction.findUnique({ where: { externalId: refId } });
+    
+    if (!existingTx) {
+      console.warn("   ⚠️ Transaction not found in DB.");
+      res.status(200).send('OK');
+      return;
+    }
+
+    // Only update if status has changed (and isn't already final)
+    if (existingTx.status === 'COMPLETED' || existingTx.status === 'REFUNDED') {
+      res.status(200).send('OK');
+      return;
+    }
+
+    let newStatus = existingTx.status;
+
+    switch (statusId) {
+      case DTONE_STATUS.COMPLETED: // 7
+        console.log("   ✅ SUCCESS: Transaction finished successfully.");
+        newStatus = 'COMPLETED';
+        break;
+
+      case DTONE_STATUS.REJECTED: // 3
+      case DTONE_STATUS.DECLINED: // 9
+      case DTONE_STATUS.CANCELLED: // 4
+      case DTONE_STATUS.REVERSED: // 8
+        console.error(`   ❌ FAILED: ${statusMsg}`);
+        
+        // 💰 AUTO-REFUND USER (if not already refunded)
+        if (existingTx.paymentIntentId && existingTx.status !== 'REFUNDED') {
+           await paymentService.refundPayment(existingTx.paymentIntentId);
+           newStatus = 'REFUNDED';
+        } else {
+           newStatus = 'FAILED';
+        }
+        break;
+
+      default:
+        console.log("   ⏳ PENDING: Update received.");
+        break;
+    }
+
+    await db.transaction.update({
+      where: { externalId: refId },
+      data: { status: newStatus }
+    });
+
+  } catch (e) {
+    console.error("Callback Error:", e);
+  }
+
+  res.status(200).send('OK');
 });
 
 // ==================================================================
@@ -122,28 +253,10 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 // ==================================================================
 app.use(express.static(path.join(__dirname, '../dist')));
 
-// FIX: Use Regex (/(.*)/) instead of '*' for Express 5 compatibility
 app.get(/(.*)/, (_req: Request, res: Response) => {
   res.sendFile(path.join(__dirname, '../dist/index.html'));
 });
 
-// ==================================================================
-// 🔔 DTONE CALLBACK (WEBHOOK)
-// ==================================================================
-app.post('/api/callback', (req: Request, res: Response) => {
-  const transaction = req.body;
-
-  console.log('\n🔔 [DTOne Hook] Transaction Update Received:');
-  console.log(`   ID: ${transaction.id}`);
-  console.log(`   Ref: ${transaction.external_id}`);
-  console.log(`   Status: ${transaction.status?.message} (${transaction.status?.class?.message})`);
-
-  // TODO: Update your database here using transaction.external_id
-
-  // Always respond with 200 OK to acknowledge receipt
-  res.status(200).send('OK');
-});
-
-app.listen(PORT, () => {
-  console.log(`🚀 API Server running on port ${PORT}`);
+app.listen(Number(PORT), '0.0.0.0', () => {
+  console.log(`🚀 API Server running on port ${PORT} (IPv4)`);
 });
