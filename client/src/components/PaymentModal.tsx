@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
@@ -38,6 +38,15 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
     setMessage(null);
 
     try {
+      // 1. Validate the form first
+      const { error: submitError } = await elements.submit();
+      if (submitError) {
+        setMessage(submitError.message || "Please check your card details.");
+        setIsProcessing(false);
+        return;
+      }
+
+      // 2. Confirm Payment
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
@@ -86,20 +95,16 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
 export default function PaymentModal({ isOpen, onClose, onSuccess, amount, currency }: PaymentModalProps) {
   const [clientSecret, setClientSecret] = useState('');
   const [initError, setInitError] = useState('');
+  const fetchedRef = useRef(false);
 
   useEffect(() => {
-    if (isOpen) {
-      // Reset state when modal opens
-      setClientSecret('');
+    if (isOpen && amount > 0) {
+      if (fetchedRef.current) return;
+      fetchedRef.current = true;
+
       setInitError('');
+      setClientSecret('');
 
-      // 1. Validation Check
-      if (!amount || amount <= 0 || isNaN(amount)) {
-        setInitError("Invalid amount to charge. Please try a different product.");
-        return;
-      }
-
-      // 2. Create Payment Intent
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -116,7 +121,13 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
         .catch((err) => {
           console.error('Payment Intent Error:', err);
           setInitError(err.message || "Could not connect to payment server.");
+          fetchedRef.current = false;
         });
+    }
+
+    if (!isOpen) {
+      fetchedRef.current = false;
+      setClientSecret('');
     }
   }, [isOpen, amount, currency]);
 
@@ -125,7 +136,6 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
   return (
     <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] flex flex-col">
-        {/* Header */}
         <div className="bg-gray-50 p-4 flex justify-between items-center border-b shrink-0">
           <div>
             <h3 className="font-bold text-gray-800">Secure Payment</h3>
@@ -136,7 +146,6 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
           </button>
         </div>
 
-        {/* Body */}
         <div className="p-6 overflow-y-auto">
           <div className="mb-6 text-center">
             <span className="text-3xl font-bold text-gray-900">
@@ -144,9 +153,9 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
             </span>
           </div>
 
-          {/* Logic to show Form, Spinner, or Error */}
           {clientSecret ? (
-            <Elements options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
+            // 💡 THIS KEY IS CRITICAL: It forces Stripe to reload if connection is lost
+            <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
               <CheckoutForm onSuccess={onSuccess} />
             </Elements>
           ) : initError ? (
