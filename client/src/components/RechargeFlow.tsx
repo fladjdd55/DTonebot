@@ -11,32 +11,26 @@ import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 
 export default function RechargeFlow() {
-  // --- STATE ---
   const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1); 
   
-  // Input State
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCountry, setSelectedCountry] = useState<Country | null>(null);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [showDropdown, setShowDropdown] = useState(false);
   const [validationState, setValidationState] = useState<PhoneValidationResult | null>(null);
   
-  // API Data State
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
   const [operator, setOperator] = useState<any>(null);
   const [products, setProducts] = useState<Product[]>([]);
   const [txnResult, setTxnResult] = useState<any>(null);
   
-  // UI State
   const [logoError, setLogoError] = useState(false);
   const [activeTab, setActiveTab] = useState<'AIRTIME' | 'DATA' | 'BUNDLES'>('AIRTIME');
   const [customAmount, setCustomAmount] = useState('');
   
-  // Manual Selection Mode
   const [showManualSelection, setShowManualSelection] = useState(false);
 
-  // PAYMENT STATE
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number} | null>(null);
 
@@ -45,10 +39,7 @@ export default function RechargeFlow() {
   
   const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.iso3);
 
-  // --- FILTERING LOGIC ---
-
   const filteredCountries = useMemo(() => {
-    // Ensure 'countries' is passed as the first argument
     return filterCountries(countries || [], searchQuery || '');
   }, [searchQuery, countries]);
 
@@ -70,8 +61,6 @@ export default function RechargeFlow() {
     return found ? found.name : operator.countryIso;
   }, [operator, countries]);
 
-
-  // --- HANDLERS: UI ---
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
@@ -116,8 +105,6 @@ export default function RechargeFlow() {
     const validation = validatePhoneNumber(digits, code);
     setValidationState(validation);
   };
-
-  // --- HANDLERS: API FLOW ---
 
   const handleLookupOperator = async () => {
     if (!selectedCountry || !validationState?.valid) return;
@@ -166,11 +153,9 @@ export default function RechargeFlow() {
     }
   };
 
-  // ✅ FIX: Correct Amount Parsing
   const handlePurchase = async (product: Product, amount?: number) => {
     let finalAmount = amount || 0;
     
-    // If not ranged (Fixed price), extract amount from string "10 SGD" -> 10
     if (product.type !== 'RANGED_VALUE_RECHARGE') {
       const priceString = product.amount.split(' ')[0]; 
       finalAmount = parseFloat(priceString);
@@ -186,7 +171,7 @@ export default function RechargeFlow() {
   };
 
   // ✅ FIX: Updated to handle immediate backend failure
-  const executeTransaction = async (paymentId?: string) => {
+  const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
     setIsPayModalOpen(false); 
@@ -201,9 +186,9 @@ export default function RechargeFlow() {
         paymentId
       );
 
-      // Check success flag from updated backend
-      if (result.success === false) {
-         throw new Error(result.status || 'Transaction Failed');
+      // ✅ Check the success flag from backend
+      if (result.success === false || !result.id) {
+        throw new Error(result.status || 'Transaction Failed');
       }
 
       setTxnResult(result);
@@ -226,8 +211,6 @@ export default function RechargeFlow() {
     setShowManualSelection(false);
   };
 
-  // --- RENDER ---
-  
   if (countriesLoading) return <div className="text-center p-10"><Loader2 className="w-8 h-8 mx-auto animate-spin text-indigo-600" /><p className="mt-4 text-gray-600">Loading countries list...</p></div>;
   if (countriesError && !usingFallback && countries.length === 0) return <div className="text-center p-10 text-red-600">{countriesError}</div>;
 
@@ -257,7 +240,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* === STEP 1: INPUT === */}
           {step === 1 && (
             <div className="space-y-6">
               <div className="relative" ref={dropdownRef}>
@@ -545,7 +527,7 @@ export default function RechargeFlow() {
                onClose={() => setIsPayModalOpen(false)}
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
-               onSuccess={(paymentId?: string) => executeTransaction(paymentId as string)} 
+               onSuccess={executeTransaction}
              />
           )}
 

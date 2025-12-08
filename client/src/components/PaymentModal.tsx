@@ -3,10 +3,7 @@ import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
 
-// 🚀 DYNAMIC URL
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-
-// 🔑 Load from Environment Variable
 const STRIPE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '';
 
 if (!STRIPE_KEY) {
@@ -18,12 +15,12 @@ const stripePromise = loadStripe(STRIPE_KEY);
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: () => void;
+  onSuccess: (paymentId: string) => void; // ✅ Accept payment ID
   amount: number;
   currency: string;
 }
 
-function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
+function CheckoutForm({ onSuccess }: { onSuccess: (paymentId: string) => void }) {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
@@ -38,7 +35,6 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
     setMessage(null);
 
     try {
-      // 1. Validate the form first
       const { error: submitError } = await elements.submit();
       if (submitError) {
         setMessage(submitError.message || "Please check your card details.");
@@ -46,7 +42,6 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
         return;
       }
 
-      // 2. Confirm Payment
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
@@ -59,7 +54,7 @@ function CheckoutForm({ onSuccess }: { onSuccess: () => void }) {
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        onSuccess();
+        onSuccess(paymentIntent.id); // ✅ Pass payment intent ID
       } else {
         setMessage(`Payment status: ${paymentIntent?.status}`);
         setIsProcessing(false);
@@ -154,7 +149,6 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
           </div>
 
           {clientSecret ? (
-            // 💡 THIS KEY IS CRITICAL: It forces Stripe to reload if connection is lost
             <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
               <CheckoutForm onSuccess={onSuccess} />
             </Elements>

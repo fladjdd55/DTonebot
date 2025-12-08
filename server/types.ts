@@ -28,13 +28,13 @@ export interface Product {
   min: number;
   max: number;
   subserviceId?: number;
-  benefits?: string[]; // Added optional benefits array just in case
+  benefits?: string[];
 }
 
 export interface TransactionResult {
   id: number;
   status: string;
-  statusId?: number; // 👈 ✅ Added this field
+  statusId?: number; // 👈 ✅ ADD THIS FIELD
   externalId: string;
   message?: string;
 }
