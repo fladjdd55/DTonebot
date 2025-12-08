@@ -13,7 +13,7 @@ export const formatPhoneNumber = (value: string, countryCode: CountryCode): stri
     const phoneNumber = parsePhoneNumber(value, countryCode);
     if (phoneNumber) {
       // ✅ FIX: Use 'INTERNATIONAL' (Uppercase)
-      return phoneNumber.format('INTERNATIONAL'); 
+      return phoneNumber.format('NATIONAL'); 
     }
   } catch (error) {
     return value; 
