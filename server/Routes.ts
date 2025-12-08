@@ -105,6 +105,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     const callbackUrl = process.env.DTONE_CALLBACK_URL
       ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
       : undefined;
+      console.log(`[Purchase] Sending Callback URL: ${callbackUrl}`);
 
     const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit);
     if (!result.success) {
