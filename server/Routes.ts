@@ -112,14 +112,13 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ✅ UPDATED PURCHASE ROUTE (With Immediate Refund Logic)
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   const { productId, mobile, amount, unit, paymentId } = req.body;
-  
+
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
 
   try {
-    const callbackUrl = process.env.DTONE_CALLBACK_URL 
+    const callbackUrl = process.env.DTONE_CALLBACK_URL
       ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
       : undefined;
 
@@ -127,23 +126,20 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 
     // 1. Execute Purchase
     const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, callbackUrl);
-    
-    // 2. Handle API Level Errors (Network/Auth)
+
+    // 2. Handle API Errors (Network/Auth)
     if (!result.success || !result.data) {
-      if (paymentId) {
-        console.log(`[Purchase] API Failed. Refunding ${paymentId}...`);
-        await paymentService.refundPayment(paymentId);
-      }
+      if (paymentId) await paymentService.refundPayment(paymentId);
       return res.status(400).json({ error: result.error, code: result.code });
     }
 
-    // 3. Handle Transaction Level Failures (Declined/Rejected)
+    // 3. Handle Transaction Failures (DECLINED / REJECTED)
     const statusId = result.data.statusId;
     let dbStatus = 'PENDING';
-    
+
     if (statusId === DTONE_STATUS.COMPLETED) dbStatus = 'COMPLETED';
 
-    // If "Declined" or "Rejected", refund immediately!
+    // 🛑 CRITICAL FIX: Refund immediately if declined
     if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
       console.error(`[Purchase] ❌ Immediate Failure (Code ${statusId}): ${result.data.status}`);
       if (paymentId) {
@@ -152,7 +148,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       } else {
         dbStatus = 'FAILED';
       }
-    }
+    };
 
     // 4. Save to Database
     try {
@@ -171,16 +167,17 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     }
 
     // 5. Return result with explicit success flag
-    // The frontend will check 'success' to know if it should show the green checkmark
-    return res.json({ 
-      ...result.data, 
-      success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' 
+    // 🛑 CRITICAL FIX: This tells the frontend it failed!
+    return res.json({
+      ...result.data,
+      success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING'
     });
 
   } catch (error: any) {
     return res.status(500).json({ error: error.message });
   }
 });
+
 
 // ==================================================================
 // 🔔 DTONE CALLBACK (WEBHOOK)

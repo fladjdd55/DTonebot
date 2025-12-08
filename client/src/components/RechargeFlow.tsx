@@ -186,11 +186,15 @@ export default function RechargeFlow() {
         paymentId
       );
 
-      // ✅ Check the success flag from backend
-      if (result.success === false || !result.id) {
-        throw new Error(result.status || 'Transaction Failed');
-      }
-
+     // ✅ ROBUST CHECK: Fail if success is false OR status is suspicious
+    if (
+      result.success === false || 
+      !result.id || 
+      result.status === 'DECLINED' || 
+      result.status === 'REJECTED'
+    ) {
+      throw new Error(result.status || 'Transaction Failed');
+    }
       setTxnResult(result);
       setStep(3); 
     } catch (err: any) {
