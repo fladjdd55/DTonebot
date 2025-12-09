@@ -12,16 +12,18 @@ if (!STRIPE_KEY) {
 
 const stripePromise = loadStripe(STRIPE_KEY);
 
+// ✅ FIX 1: Update Interface to accept new data
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: (paymentId: string) => Promise<void>;
   amount: number;
   currency: string;
+  mobile: string;       // 👈 Added
+  productId: number;    // 👈 Added
+  productType: string;  // 👈 Added
 }
 
-// 1. Checkout Form Component
-// ✅ FIX: Removed unused 'paymentId' prop and type definition
 function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -56,8 +58,6 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        // ✅ AWAIT PARENT Logic (RechargeFlow)
-        // We use the ID returned directly from Stripe
         await onSuccess(paymentIntent.id);
       } else if (paymentIntent && paymentIntent.status === 'requires_action') {
         setMessage("Authentication required. Please complete the security check.");
@@ -68,7 +68,7 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
       }
     } catch (err: any) {
       console.error("Payment Error:", err);
-      setMessage('An unexpected error occurred. Please try again.');
+      setMessage(err.message || 'An unexpected error occurred. Please try again.');
       setIsProcessing(false);
     }
   };
@@ -94,10 +94,19 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
   );
 }
 
-// 2. Main Modal Component
-export default function PaymentModal({ isOpen, onClose, onSuccess, amount, currency }: PaymentModalProps) {
+// ✅ FIX 2: Destructure new props here so they are available in scope
+export default function PaymentModal({ 
+  isOpen, 
+  onClose, 
+  onSuccess, 
+  amount, 
+  currency, 
+  mobile,      // 👈 Added
+  productId,   // 👈 Added
+  productType  // 👈 Added
+}: PaymentModalProps) {
+  
   const [clientSecret, setClientSecret] = useState('');
-  // ✅ FIX: Removed unused 'paymentIntentId' state to prevent further TS errors
   const [initError, setInitError] = useState('');
   const fetchedRef = useRef(false);
 
@@ -112,7 +121,14 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amount, currency }),
+        // ✅ FIX 3: Now these variables exist in scope!
+        body: JSON.stringify({ 
+          amount, 
+          currency, 
+          mobile, 
+          productId, 
+          type: productType 
+        }),
       })
         .then(async (res) => {
           const data = await res.json();
@@ -121,7 +137,6 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
         })
         .then((data) => {
           setClientSecret(data.clientSecret);
-          // Note: We don't need to store data.id here anymore
         })
         .catch((err) => {
           console.error('Payment Intent Error:', err);
@@ -134,7 +149,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
       fetchedRef.current = false;
       setClientSecret('');
     }
-  }, [isOpen, amount, currency]);
+  }, [isOpen, amount, currency, mobile, productId, productType]); // Added dependencies
 
   if (!isOpen) return null;
 
@@ -160,7 +175,6 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
 
           {clientSecret ? (
             <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
-              {/* ✅ FIX: Removed 'paymentId' prop passed to CheckoutForm */}
               <CheckoutForm onSuccess={onSuccess} />
             </Elements>
           ) : initError ? (

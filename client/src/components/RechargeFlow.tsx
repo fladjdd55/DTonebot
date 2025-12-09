@@ -599,6 +599,9 @@ export default function RechargeFlow() {
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
                onSuccess={executeTransaction} // ✅ Pass the handler
+               mobile={pendingTxn.mobile}
+               productId={pendingTxn.product.id}
+               productType={pendingTxn.product.type}
              />
           )}
 
