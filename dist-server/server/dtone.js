@@ -234,11 +234,12 @@ exports.dtoneService = {
     // C. GET PRODUCTS (WITH PAGINATION FIX)
     // ----------------------------------------
     getProductsForOperator: function (operatorId_1) {
-        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage // Increase page size
-        ) {
+        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, // Increase page size
+        lang) {
             var page, allProducts, hasMore, response, rawList, list, products, error_3, err;
             if (serviceId === void 0) { serviceId = 1; }
             if (perPage === void 0) { perPage = 100; }
+            if (lang === void 0) { lang = 'en'; }
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -257,7 +258,8 @@ exports.dtoneService = {
                                 operator_id: operatorId,
                                 service_id: serviceId,
                                 page: page,
-                                per_page: perPage
+                                per_page: perPage,
+                                'Accept-Language': lang
                             })];
                     case 3:
                         response = _a.sent();

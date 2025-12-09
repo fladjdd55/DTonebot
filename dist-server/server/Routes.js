@@ -340,25 +340,25 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
     });
 }); });
 app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var operatorId, result, error_4;
-    return __generator(this, function (_a) {
-        switch (_a.label) {
+    var _a, operatorId, lang, result, error_4;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
             case 0:
-                operatorId = req.body.operatorId;
+                _a = req.body, operatorId = _a.operatorId, lang = _a.lang;
                 if (!operatorId)
                     return [2 /*return*/, res.status(400).json({ error: 'Operator ID is required' })];
-                _a.label = 1;
+                _b.label = 1;
             case 1:
-                _a.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(operatorId)];
+                _b.trys.push([1, 3, , 4]);
+                return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(operatorId, 1, lang)];
             case 2:
-                result = _a.sent();
+                result = _b.sent();
                 if (!result.success) {
                     return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
                 }
                 return [2 /*return*/, res.json(result.data)];
             case 3:
-                error_4 = _a.sent();
+                error_4 = _b.sent();
                 return [2 /*return*/, res.status(500).json({ error: error_4.message })];
             case 4: return [2 /*return*/];
         }

@@ -183,7 +183,8 @@ export const dtoneService = {
   async getProductsForOperator(
     operatorId: number, 
     serviceId: number = 1, 
-    perPage: number = 100 // Increase page size
+    perPage: number = 100, // Increase page size
+    lang: string = 'en'
   ): Promise<ApiResponse<Product[]>> {
     
     console.log(`[DTOne] Fetching Products: Op=${operatorId}, Svc=${serviceId}`);
@@ -201,7 +202,8 @@ export const dtoneService = {
           operator_id: operatorId,
           service_id: serviceId, 
           page: page,
-          per_page: perPage
+          per_page: perPage,
+	  'Accept-Language': lang
         });
         
         const rawList = response.data || response;

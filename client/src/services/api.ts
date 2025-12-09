@@ -27,11 +27,11 @@ export const rechargeApi = {
     return data;
   },
 
-  async getProducts(operatorId: number) {
+  async getProducts(operatorId: number, lang?: string) {
     const res = await fetch(`${API_URL}/products`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operatorId })
+      body: JSON.stringify({ operatorId, lang })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load products');

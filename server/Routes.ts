@@ -252,10 +252,10 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
 });
 
 app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
-  const { operatorId } = req.body;
+  const { operatorId, lang } = req.body;
   if (!operatorId) return res.status(400).json({ error: 'Operator ID is required' });
   try {
-    const result = await dtoneService.getProductsForOperator(operatorId);
+    const result = await dtoneService.getProductsForOperator(operatorId, 1, lang);
     if (!result.success) {
       return res.status(400).json({ error: result.error, code: result.code });
     }

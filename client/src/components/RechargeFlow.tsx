@@ -9,6 +9,8 @@ import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValida
 import { filterCountries, type Country } from '../shared/countryValidator'; 
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
+// ✅ Import the language helper
+import { getLanguageForCountry } from '../shared/countryLanguages';
 
 // ✅ CONFIG: Read from .env or default to 5
 const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_USD_ORDER) || 5;
@@ -154,12 +156,18 @@ export default function RechargeFlow() {
     setApiError('');
   };
 
+  // ✅ UPDATED: Pass language to API
   const handleConfirmOperator = async () => {
     if (!operator) return;
     setLoading(true);
     setApiError('');
+
+    // 1. Get the correct language based on the selected country
+    const lang = selectedCountry ? getLanguageForCountry(selectedCountry.code) : 'en';
+
     try {
-      const prodData = await rechargeApi.getProducts(operator.operatorId);
+      // 2. Pass the language to the API
+      const prodData = await rechargeApi.getProducts(operator.operatorId, lang);
       setProducts(prodData);
       setStep(2);
     } catch (err: any) {
@@ -183,16 +191,11 @@ export default function RechargeFlow() {
     } 
 
     // 2. ✅ CALCULATE EFFECTIVE MINIMUM (The Smart Logic)
-    // If USD, take the higher of (Your Limit vs Operator Limit). 
-    // If not USD, just use Operator Limit.
     const effectiveMin = product.currency === 'USD' 
       ? Math.max(product.min, MIN_USD_AMOUNT) 
       : product.min;
 
     // 3. ✅ UNIFIED CHECK
-    // This handles BOTH cases:
-    // - User tries $3 (blocked by your $5 limit)
-    // - User tries $8 on a $10 product (blocked by operator's $10 limit)
     if (product.type === 'RANGED_VALUE_RECHARGE' || product.type === 'RANGED_VALUE_PIN') {
        if (!finalAmount || finalAmount < effectiveMin || finalAmount > product.max) {
         setApiError(`Amount must be between ${effectiveMin} and ${product.max} ${product.currency}`);
@@ -212,8 +215,6 @@ export default function RechargeFlow() {
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
     
-    // Release the lock so they can cancel the modal and try again if needed,
-    // but the Modal itself will handle the actual payment processing lock.
     setIsPurchasing(false); 
   };
 
