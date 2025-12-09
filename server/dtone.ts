@@ -228,12 +228,9 @@ export const dtoneService = {
 	callback_url: callbackUrl
       };
 
-      // Strict requirement: Only send destination/calculation_mode for Ranged Products
-      if (amount > 0) {
-        if (!unit) {
-          return { success: false, error: 'Currency unit required for custom amounts', code: 'MISSING_UNIT' };
-        }
-
+            // ✅ FIX: Only add calculation_mode if BOTH amount and unit are present.
+      // If unit is missing, we assume it's a Fixed Product (value implied by ID) and proceed.
+      if (amount > 0 && unit) {
         payload.calculation_mode = 'DESTINATION_AMOUNT';
         payload.destination = {
           unit_type: 'CURRENCY',
@@ -241,6 +238,7 @@ export const dtoneService = {
           amount: amount
         };
       }
+
 
       const response = await dtone.postTransactionSync(payload);
       const data = (response.data || response) as any;

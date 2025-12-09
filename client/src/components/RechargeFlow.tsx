@@ -32,7 +32,7 @@ export default function RechargeFlow() {
   const [showManualSelection, setShowManualSelection] = useState(false);
 
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
-  const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number} | null>(null);
+  const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
@@ -166,25 +166,26 @@ export default function RechargeFlow() {
       }
     }
 
-    setPendingTxn({ product, amount: finalAmount });
+    setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
   };
 
-  // ✅ FIX: Updated to handle immediate backend failure
-  const executeTransaction = async (paymentId: string) => {
+    const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
     setIsPayModalOpen(false); 
     setLoading(true); 
 
     try {
+      // ✅ FIX: Ensure exactly 5 arguments are passed
       const result = await rechargeApi.purchase(
-        pendingTxn.product.id, 
-        validationState?.fullNumber || '', 
-        pendingTxn.amount,
-        pendingTxn.product.currency,
-        paymentId
+        pendingTxn.product.id,       // 1. Product ID
+        pendingTxn.mobile,           // 2. Mobile Number (Saved from handlePurchase)
+        pendingTxn.amount,           // 3. Amount
+        pendingTxn.product.currency, // 4. Currency Unit
+        paymentId                    // 5. Payment ID
       );
+
 
      // ✅ ROBUST CHECK: Fail if success is false OR status is suspicious
     if (
