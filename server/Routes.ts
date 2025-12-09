@@ -158,7 +158,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
           externalId: result.data.externalId,
 	  paymentId: paymentId || null,     // Fix: Use 'paymentId' field as per schema error
           productType: type,                // Fix: Add 'productType' field
-          currency: unit,                   // Fix: Add 'currency' field (which is 'unit')
+          currency: unit || 'UNKNOWN',                   // Fix: Add 'currency' field (which is 'unit')
           paymentIntentId: paymentId || null,
           mobile: mobile,
           productId: Number(productId),
