@@ -33,6 +33,9 @@ export default function RechargeFlow() {
 
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
+  
+  // ✅ IDEMPOTENCY: Prevent double submissions
+  const [isPurchasing, setIsPurchasing] = useState(false);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
@@ -154,6 +157,10 @@ export default function RechargeFlow() {
   };
 
   const handlePurchase = async (product: Product, amount?: number) => {
+    // ✅ IDEMPOTENCY check
+    if (isPurchasing) return;
+    setIsPurchasing(true);
+
     let finalAmount = amount || 0;
     
     if (product.type !== 'RANGED_VALUE_RECHARGE') {
@@ -162,48 +169,53 @@ export default function RechargeFlow() {
     } else {
       if (!finalAmount || finalAmount < product.min || finalAmount > product.max) {
         setApiError(`Amount must be between ${product.min} and ${product.max}`);
+        setIsPurchasing(false);
         return;
       }
     }
 
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
+    
+    // Release the lock so they can cancel the modal and try again if needed,
+    // but the Modal itself will handle the actual payment processing lock.
+    setIsPurchasing(false); 
   };
 
-    const executeTransaction = async (paymentId: string) => {
+  const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
+    // 🛑 DO NOT CLOSE MODAL YET. Wait for backend response.
     setLoading(true); 
+    setApiError('');
 
     try {
-      // ✅ FIX: Ensure exactly 5 arguments are passed
       const result = await rechargeApi.purchase(
-        pendingTxn.product.id,       // 1. Product ID
-        pendingTxn.mobile,           // 2. Mobile Number (Saved from handlePurchase)
-        pendingTxn.amount,           // 3. Amount
-        pendingTxn.product.currency, // 4. Currency Unit
-        pendingTxn.product.type,     // 5. 👈 NEW: Product Type (e.g., "FIXED_VALUE_RECHARGE")
-        paymentId                    // 5. Payment ID
+        pendingTxn.product.id,       
+        pendingTxn.mobile,           
+        pendingTxn.amount,           
+        pendingTxn.product.currency, 
+        pendingTxn.product.type,     
+        paymentId                    
       );
 
+      // ✅ FIX: Check for explicit success flags from our new robust backend
+      if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
+        const errorMsg = result.refunded 
+          ? `Transaction failed. Your payment has been refunded automatically.`
+          : `Transaction failed: ${result.message || result.error || 'Unknown error'}`;
+        
+        throw new Error(errorMsg);
+      }
 
-     // ✅ ROBUST CHECK: Fail if success is false OR status is suspicious
-    if (
-      result.success === false || 
-      !result.id || 
-      result.status === 'DECLINED' || 
-      result.status === 'REJECTED'
-    ) {
-      throw new Error(result.status || 'Transaction Failed');
-    }
+      // Success!
       setTxnResult(result);
-      // ✅ NOW we can close the modal safely
-      setIsPayModalOpen(false);
+      setIsPayModalOpen(false); // ✅ Safe to close now
       setStep(3); 
+      
     } catch (err: any) {
-      setApiError(err.message || "Transaction failed. A refund has been issued.");
-      // Even on error, we close it now
-      setIsPayModalOpen(false);
+      // ✅ Keep modal OPEN so user can see the specific error
+      setApiError(err.message || "Transaction failed. Please try again.");
     } finally {
       setLoading(false);
     }
@@ -519,7 +531,7 @@ export default function RechargeFlow() {
               <p className="text-gray-500 mb-6">Top-up sent successfully.</p>
               
               <div className="bg-gray-50 p-4 rounded-lg text-left text-sm space-y-2 mb-6">
-                <div className="flex justify-between"><span>Status:</span> <span className="font-bold">{txnResult.status.message || txnResult.status}</span></div>
+                <div className="flex justify-between"><span>Status:</span> <span className="font-bold">{txnResult.status || 'COMPLETED'}</span></div>
                 <div className="flex justify-between"><span>ID:</span> <span className="font-mono">{txnResult.id}</span></div>
                 <div className="flex justify-between"><span>Mobile:</span> <span className="font-mono">{validationState?.fullNumber}</span></div>
               </div>
@@ -536,7 +548,7 @@ export default function RechargeFlow() {
                onClose={() => setIsPayModalOpen(false)}
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
-               onSuccess={executeTransaction}
+               onSuccess={executeTransaction} // ✅ Pass the handler
              />
           )}
 

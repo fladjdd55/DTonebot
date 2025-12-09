@@ -15,12 +15,13 @@ const stripePromise = loadStripe(STRIPE_KEY);
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSuccess: (paymentId: string) => void; // ✅ Accept payment ID
+  onSuccess: (paymentId: string) => Promise<void>; // ✅ Return Promise
   amount: number;
   currency: string;
 }
 
-function CheckoutForm({ onSuccess }: { onSuccess: (paymentId: string) => void }) {
+// 1. Checkout Form Component
+function CheckoutForm({ onSuccess, paymentId }: { onSuccess: (id: string) => Promise<void>, paymentId: string }) {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
@@ -54,10 +55,15 @@ function CheckoutForm({ onSuccess }: { onSuccess: (paymentId: string) => void })
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        await onSuccess(paymentIntent.id); // ✅ Pass payment intent ID
-      
+        // ✅ AWAIT PARENT Logic (RechargeFlow)
+        await onSuccess(paymentIntent.id);
+        // Note: Do NOT setIsProcessing(false) here, the modal will close or show step 3
+      } else if (paymentIntent && paymentIntent.status === 'requires_action') {
+        setMessage("Authentication required. Please complete the security check.");
+        setIsProcessing(false);
       } else {
         setMessage(`Payment status: ${paymentIntent?.status}`);
+        setIsProcessing(false);
       }
     } catch (err: any) {
       console.error("Payment Error:", err);
@@ -87,8 +93,10 @@ function CheckoutForm({ onSuccess }: { onSuccess: (paymentId: string) => void })
   );
 }
 
+// 2. Main Modal Component
 export default function PaymentModal({ isOpen, onClose, onSuccess, amount, currency }: PaymentModalProps) {
   const [clientSecret, setClientSecret] = useState('');
+  const [paymentIntentId, setPaymentIntentId] = useState(''); // ✅ Store ID here
   const [initError, setInitError] = useState('');
   const fetchedRef = useRef(false);
 
@@ -99,6 +107,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
 
       setInitError('');
       setClientSecret('');
+      setPaymentIntentId('');
 
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
@@ -112,6 +121,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
         })
         .then((data) => {
           setClientSecret(data.clientSecret);
+          setPaymentIntentId(data.id); // ✅ Save ID for redundancy
         })
         .catch((err) => {
           console.error('Payment Intent Error:', err);
@@ -123,6 +133,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
     if (!isOpen) {
       fetchedRef.current = false;
       setClientSecret('');
+      setPaymentIntentId('');
     }
   }, [isOpen, amount, currency]);
 
@@ -150,7 +161,7 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, amount, curre
 
           {clientSecret ? (
             <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
-              <CheckoutForm onSuccess={onSuccess} />
+              <CheckoutForm onSuccess={onSuccess} paymentId={paymentIntentId} />
             </Elements>
           ) : initError ? (
             <div className="flex flex-col items-center justify-center py-6 text-center text-red-600 space-y-2">

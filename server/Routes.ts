@@ -137,77 +137,122 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   const { productId, mobile, amount, unit, paymentId, type } = req.body;
 
-  if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
+  if (!productId || !mobile || !paymentId) {
+    return res.status(400).json({ error: 'Missing required fields' });
+  }
+
+  let dbTransaction = null;
 
   try {
     const callbackUrl = process.env.DTONE_CALLBACK_URL
       ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
       : undefined;
 
-    if (callbackUrl) console.log(`[Purchase] Attaching Callback: ${callbackUrl}`);
+    // 1. Execute DTOne Purchase
+    const result = await dtoneService.purchaseProduct(
+      productId, 
+      mobile, 
+      amount || 0, 
+      unit, 
+      type, 
+      callbackUrl
+    );
 
-    // 1. Execute Purchase
-    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl);
-
-    // 2. Handle API Errors (Network/Auth)
+    // 2. Handle API-level failures (network, auth, etc.)
     if (!result.success || !result.data) {
-      if (paymentId) await paymentService.refundPayment(paymentId);
-      return res.status(400).json({ error: result.error, code: result.code });
+      console.error(`[Purchase] API Error: ${result.error}`);
+      const refund = await paymentService.refundPayment(paymentId);
+      
+      return res.status(400).json({ 
+        success: false,
+        error: result.error, 
+        code: result.code,
+        refunded: !!refund,
+        refundId: refund?.id
+      });
     }
 
-    // 3. Handle Transaction Failures (DECLINED / REJECTED)
+    // 3. Determine transaction status
     const statusId = result.data.statusId;
     let dbStatus = 'PENDING';
+    let shouldRefund = false;
 
-    if (statusId === DTONE_STATUS.COMPLETED) dbStatus = 'COMPLETED';
+    if (statusId === DTONE_STATUS.COMPLETED) {
+      dbStatus = 'COMPLETED';
+    } else if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
+      dbStatus = 'FAILED'; // Will become REFUNDED
+      shouldRefund = true;
+    }
 
-    if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
-      console.error(`[Purchase] ❌ Immediate Failure (Code ${statusId}): ${result.data.status}`);
-      if (paymentId) {
-        await paymentService.refundPayment(paymentId);
-        dbStatus = 'REFUNDED';
-      } else {
-        dbStatus = 'FAILED';
-      }
-    };
+    // 4. Trigger Immediate Refund if failed
+    let refund = null;
+    if (shouldRefund) {
+      console.warn(`[Purchase] ❌ Immediate Failure (Code ${statusId}). Refunding...`);
+      refund = await paymentService.refundPayment(paymentId);
+      if (refund) dbStatus = 'REFUNDED';
+    }
 
-    // 4. Save to Database
+    // 5. Save to Database
     try {
-      await db.transaction.create({
+      dbTransaction = await db.transaction.create({
         data: {
           externalId: result.data.externalId,
-          
-          // ✅ FIX 1: Add 'paymentId' (Required by your schema)
-          paymentId: paymentId || "N/A", 
-          
-          // Optional: Keep paymentIntentId if your schema still has it
-          paymentIntentId: paymentId || null, 
-
+          paymentIntentId: paymentId,
+          // ✅ FIX: Ensure 'paymentId' column matches your schema
+          paymentId: paymentId, 
           mobile: mobile,
           productId: Number(productId),
           amount: Number(amount || 0),
-          
-          // ✅ FIX 2: Add 'currency'
           currency: unit || 'UNKNOWN',
-          
-          // ✅ FIX 3: Add 'productType' (Required by your schema)
           productType: type || 'UNKNOWN',
-          
           status: dbStatus
         }
       });
     } catch (dbError) {
-      console.error("[DB] Failed to save transaction:", dbError);
+      console.error("[DB] CRITICAL: Failed to save transaction:", dbError);
+      
+      // If we haven't refunded yet, do it now because we can't track the order!
+      if (!refund) {
+        refund = await paymentService.refundPayment(paymentId);
+      }
+      
+      return res.status(500).json({ 
+        success: false,
+        error: 'Database error - payment has been refunded',
+        refunded: true,
+        refundId: refund?.id
+      });
     }
 
-    // 5. Return result
+    // 6. Return response with clear success flag
     return res.json({
-      ...result.data,
-      success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING'
+      success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING',
+      id: result.data.id,
+      externalId: result.data.externalId,
+      status: result.data.status,
+      statusId: statusId,
+      dbStatus: dbStatus,
+      message: result.data.message,
+      refunded: !!refund,
+      refundId: refund?.id
     });
 
   } catch (error: any) {
-    return res.status(500).json({ error: error.message });
+    console.error('[Purchase] Unexpected error:', error);
+    
+    // Emergency refund
+    try {
+      const refund = await paymentService.refundPayment(paymentId);
+      return res.status(500).json({ 
+        success: false,
+        error: 'Internal server error - payment refunded',
+        refunded: true,
+        refundId: refund?.id
+      });
+    } catch (refundError) {
+      // Worst case: couldn't refund
+      return res.status(500).json({ success: false, error: error.message });
+    }
   }
 });
 
