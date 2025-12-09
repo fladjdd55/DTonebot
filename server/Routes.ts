@@ -57,6 +57,28 @@ const DTONE_STATUS = {
 };
 
 // ==================================================================
+// 🔒 SECURITY HELPER (WEBHOOK)
+// ==================================================================
+const verifyWebhook = (req: Request): boolean => {
+  const authHeader = req.headers.authorization;
+  
+  // If no credentials set in .env, allow all (Dev mode)
+  if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS) {
+    return true; 
+  }
+
+  if (!authHeader) return false;
+
+  // Basic Auth format: "Basic base64(user:pass)"
+  const [scheme, credentials] = authHeader.split(' ');
+  if (scheme !== 'Basic' || !credentials) return false;
+
+  // Decode and check
+  const [user, pass] = Buffer.from(credentials, 'base64').toString().split(':');
+  return user === process.env.DTONE_WEBHOOK_USER && pass === process.env.DTONE_WEBHOOK_PASS;
+};
+
+// ==================================================================
 // API ROUTES
 // ==================================================================
 
@@ -113,8 +135,7 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
 });
 
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
-  console.log("📥 Incoming Purchase Request:", req.body);
-  const { productId, mobile, amount, unit, type, paymentId } = req.body;
+  const { productId, mobile, amount, unit, paymentId, type } = req.body;
 
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
 
@@ -126,7 +147,8 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     if (callbackUrl) console.log(`[Purchase] Attaching Callback: ${callbackUrl}`);
 
     // 1. Execute Purchase
-    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type,  callbackUrl);
+    // ✅ FIX: Passed 'type' and 'callbackUrl' in correct order
+    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl);
 
     // 2. Handle API Errors (Network/Auth)
     if (!result.success || !result.data) {
@@ -140,7 +162,6 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 
     if (statusId === DTONE_STATUS.COMPLETED) dbStatus = 'COMPLETED';
 
-    // 🛑 CRITICAL FIX: Refund immediately if declined
     if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
       console.error(`[Purchase] ❌ Immediate Failure (Code ${statusId}): ${result.data.status}`);
       if (paymentId) {
@@ -156,13 +177,11 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       await db.transaction.create({
         data: {
           externalId: result.data.externalId,
-	  paymentId: paymentId || null,     // Fix: Use 'paymentId' field as per schema error
-          productType: type,                // Fix: Add 'productType' field
-          currency: unit || 'UNKNOWN',                   // Fix: Add 'currency' field (which is 'unit')
           paymentIntentId: paymentId || null,
           mobile: mobile,
           productId: Number(productId),
           amount: Number(amount || 0),
+          currency: unit || 'UNKNOWN', // ✅ FIX: Save Currency
           status: dbStatus
         }
       });
@@ -170,8 +189,6 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       console.error("[DB] Failed to save transaction:", dbError);
     }
 
-    // 5. Return result with explicit success flag
-    // 🛑 CRITICAL FIX: This tells the frontend it failed!
     return res.json({
       ...result.data,
       success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING'
@@ -184,9 +201,17 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 
 
 // ==================================================================
-// 🔔 DTONE CALLBACK (WEBHOOK)
+// 🔔 DTONE CALLBACK (WEBHOOK) - Now with SECURITY 🔒
 // ==================================================================
 app.post('/api/callback', async (req: Request, res: Response) => {
+  
+  // 1. Verify Request comes from DTOne
+  if (!verifyWebhook(req)) {
+    console.warn(`[Callback] ⛔ Security blocked request from ${req.ip}`);
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+
   const txn = req.body;
   const statusId = txn.status?.class?.id;
   const statusMsg = txn.status?.message || 'No details';
@@ -203,7 +228,6 @@ app.post('/api/callback', async (req: Request, res: Response) => {
       return;
     }
 
-    // Only update if status has changed (and isn't already final)
     if (existingTx.status === 'COMPLETED' || existingTx.status === 'REFUNDED') {
       res.status(200).send('OK');
       return;
@@ -223,7 +247,6 @@ app.post('/api/callback', async (req: Request, res: Response) => {
       case DTONE_STATUS.REVERSED: // 8
         console.error(`   ❌ FAILED: ${statusMsg}`);
         
-        // 💰 AUTO-REFUND USER (if not already refunded)
         if (existingTx.paymentIntentId && existingTx.status !== 'REFUNDED') {
            await paymentService.refundPayment(existingTx.paymentIntentId);
            newStatus = 'REFUNDED';
@@ -252,7 +275,6 @@ app.post('/api/callback', async (req: Request, res: Response) => {
 // ==================================================================
 // 📂 SERVE REACT FRONTEND (MUST BE LAST)
 // ==================================================================
-// ✅ FIX: Use process.cwd() to always find the 'dist' folder at project root
 const DIST_PATH = path.join(process.cwd(), 'dist');
 
 app.use(express.static(DIST_PATH));
