@@ -53,29 +53,33 @@ exports.paymentService = {
     /**
      * Creates a Payment Intent and returns ID + Secret
      */
-    createPaymentIntent: function (amount, currency) {
+    createPaymentIntent: function (amount, currency, metadata) {
         return __awaiter(this, void 0, void 0, function () {
             var amountInCents, paymentIntent, error_1;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
+            var _a;
+            return __generator(this, function (_b) {
+                switch (_b.label) {
                     case 0:
-                        _a.trys.push([0, 2, , 3]);
+                        _b.trys.push([0, 2, , 3]);
                         amountInCents = Math.round(amount * 100);
                         return [4 /*yield*/, stripe.paymentIntents.create({
                                 amount: amountInCents,
                                 currency: currency.toLowerCase(),
-                                automatic_payment_methods: {
-                                    enabled: true,
-                                },
+                                automatic_payment_methods: { enabled: true },
+                                metadata: {
+                                    mobile: (metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || '',
+                                    productId: ((_a = metadata === null || metadata === void 0 ? void 0 : metadata.productId) === null || _a === void 0 ? void 0 : _a.toString()) || '',
+                                    type: (metadata === null || metadata === void 0 ? void 0 : metadata.type) || ''
+                                }
                             })];
                     case 1:
-                        paymentIntent = _a.sent();
+                        paymentIntent = _b.sent();
                         return [2 /*return*/, {
                                 clientSecret: paymentIntent.client_secret,
                                 id: paymentIntent.id // 👈 Sending ID to frontend
                             }];
                     case 2:
-                        error_1 = _a.sent();
+                        error_1 = _b.sent();
                         console.error('Stripe Error:', error_1.message);
                         throw new Error(error_1.message);
                     case 3: return [2 /*return*/];

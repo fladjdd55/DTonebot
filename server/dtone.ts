@@ -178,27 +178,53 @@ export const dtoneService = {
   },
 
   // ----------------------------------------
-  // C. GET PRODUCTS
+  // C. GET PRODUCTS (WITH PAGINATION FIX)
   // ----------------------------------------
   async getProductsForOperator(
     operatorId: number, 
     serviceId: number = 1, 
-    perPage: number = 50
+    perPage: number = 100 // Increase page size
   ): Promise<ApiResponse<Product[]>> {
     
     console.log(`[DTOne] Fetching Products: Op=${operatorId}, Svc=${serviceId}`);
     
     try {
-      const response = await dtone.getProducts({
-        operator_id: operatorId,
-        service_id: serviceId, 
-        per_page: perPage
-      });
-      
-      const rawList = response.data || response;
-      const list = (Array.isArray(rawList) ? rawList : ((rawList as any).payload || [])) as any[];
+      let page = 1;
+      let allProducts: any[] = [];
+      let hasMore = true;
 
-      const products: Product[] = list.map(p => {
+      // 🔄 LOOP until all pages are fetched
+      while (hasMore) {
+        console.log(`   ... fetching page ${page}`);
+        
+        const response = await dtone.getProducts({
+          operator_id: operatorId,
+          service_id: serviceId, 
+          page: page,
+          per_page: perPage
+        });
+        
+        const rawList = response.data || response;
+        const list = (Array.isArray(rawList) ? rawList : ((rawList as any).payload || [])) as any[];
+
+        if (list.length === 0) {
+          hasMore = false;
+        } else {
+          allProducts = [...allProducts, ...list];
+          
+          // If we received fewer items than requested, it's the last page
+          if (list.length < perPage) {
+             hasMore = false;
+          } else {
+             page++;
+          }
+        }
+      }
+
+      console.log(`[DTOne] ✅ Found ${allProducts.length} total products.`);
+
+      // Map all products
+      const products: Product[] = allProducts.map(p => {
         const dest = p.destination || {};
         let amount = 'N/A';
         

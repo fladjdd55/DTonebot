@@ -15,16 +15,19 @@ export const paymentService = {
   /**
    * Creates a Payment Intent and returns ID + Secret
    */
-  async createPaymentIntent(amount: number, currency: string) {
+  async createPaymentIntent(amount: number, currency: string, metadata?: { mobile: string, productId: number, type: string }) {
     try {
       const amountInCents = Math.round(amount * 100);
 
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amountInCents,
         currency: currency.toLowerCase(),
-        automatic_payment_methods: {
-          enabled: true,
-        },
+        automatic_payment_methods: { enabled: true },
+	metadata: {
+        mobile: metadata?.mobile || '',
+        productId: metadata?.productId?.toString() || '',
+        type: metadata?.type || ''
+      }
       });
 
       return {

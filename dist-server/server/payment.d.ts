@@ -3,7 +3,11 @@ export declare const paymentService: {
     /**
      * Creates a Payment Intent and returns ID + Secret
      */
-    createPaymentIntent(amount: number, currency: string): Promise<{
+    createPaymentIntent(amount: number, currency: string, metadata?: {
+        mobile: string;
+        productId: number;
+        type: string;
+    }): Promise<{
         clientSecret: string | null;
         id: string;
     }>;

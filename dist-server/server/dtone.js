@@ -231,30 +231,55 @@ exports.dtoneService = {
         });
     },
     // ----------------------------------------
-    // C. GET PRODUCTS
+    // C. GET PRODUCTS (WITH PAGINATION FIX)
     // ----------------------------------------
     getProductsForOperator: function (operatorId_1) {
-        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage) {
-            var response, rawList, list, products, error_3, err;
+        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage // Increase page size
+        ) {
+            var page, allProducts, hasMore, response, rawList, list, products, error_3, err;
             if (serviceId === void 0) { serviceId = 1; }
-            if (perPage === void 0) { perPage = 50; }
+            if (perPage === void 0) { perPage = 100; }
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
                         console.log("[DTOne] Fetching Products: Op=".concat(operatorId, ", Svc=").concat(serviceId));
                         _a.label = 1;
                     case 1:
-                        _a.trys.push([1, 3, , 4]);
+                        _a.trys.push([1, 5, , 6]);
+                        page = 1;
+                        allProducts = [];
+                        hasMore = true;
+                        _a.label = 2;
+                    case 2:
+                        if (!hasMore) return [3 /*break*/, 4];
+                        console.log("   ... fetching page ".concat(page));
                         return [4 /*yield*/, dtone_1.default.getProducts({
                                 operator_id: operatorId,
                                 service_id: serviceId,
+                                page: page,
                                 per_page: perPage
                             })];
-                    case 2:
+                    case 3:
                         response = _a.sent();
                         rawList = response.data || response;
                         list = (Array.isArray(rawList) ? rawList : (rawList.payload || []));
-                        products = list.map(function (p) {
+                        if (list.length === 0) {
+                            hasMore = false;
+                        }
+                        else {
+                            allProducts = __spreadArray(__spreadArray([], allProducts, true), list, true);
+                            // If we received fewer items than requested, it's the last page
+                            if (list.length < perPage) {
+                                hasMore = false;
+                            }
+                            else {
+                                page++;
+                            }
+                        }
+                        return [3 /*break*/, 2];
+                    case 4:
+                        console.log("[DTOne] \u2705 Found ".concat(allProducts.length, " total products."));
+                        products = allProducts.map(function (p) {
                             var _a, _b, _c, _d, _e, _f;
                             var dest = p.destination || {};
                             var amount = 'N/A';
@@ -278,11 +303,11 @@ exports.dtoneService = {
                             };
                         });
                         return [2 /*return*/, { success: true, data: products }];
-                    case 3:
+                    case 5:
                         error_3 = _a.sent();
                         err = handleApiError(error_3, 'Get Products');
                         return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 4: return [2 /*return*/];
+                    case 6: return [2 /*return*/];
                 }
             });
         });

@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path'; 
+import Stripe from 'stripe'; // ✅ Import Stripe directly
 import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 
@@ -10,8 +11,139 @@ import { db } from './db';
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Initialize Stripe locally for Webhook Verification
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
+  apiVersion: '2023-10-16' as any,
+});
+
 app.use(cors());
+
+// ==================================================================
+// 💳 STRIPE WEBHOOK (MUST BE BEFORE express.json)
+// ==================================================================
+// This endpoint catches "Payment Succeeded" events from Stripe directly.
+// It acts as a "Fail-Safe" if the user closes their browser before the frontend finishes.
+app.post(
+  '/api/stripe-webhook',
+  express.raw({ type: 'application/json' }), // 👈 Catch raw body for signature verification
+  async (req: Request, res: Response): Promise<any> => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      console.error('[Stripe Webhook] ⚠️ STRIPE_WEBHOOK_SECRET is missing in .env');
+      return res.status(500).send('Webhook secret not configured');
+    }
+
+    if (!sig) {
+      return res.status(400).send('Missing signature');
+    }
+
+    let event: Stripe.Event;
+
+    try {
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    } catch (err: any) {
+      console.error(`[Stripe Webhook] ⚠️ Signature Error: ${err.message}`);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle the event
+    try {
+      if (event.type === 'payment_intent.succeeded') {
+        const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        await handleFailSafePurchase(paymentIntent);
+      } else if (event.type === 'payment_intent.payment_failed') {
+        console.log(`[Stripe Webhook] ❌ Payment Failed: ${event.data.object.id}`);
+      }
+      
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error('[Stripe Webhook] Handler Error:', error);
+      res.status(500).send('Webhook handler failed');
+    }
+  }
+);
+
+// ✅ NOW we can enable JSON parsing for all other routes
 app.use(express.json());
+
+// ==================================================================
+// 🧠 FAIL-SAFE FULFILLMENT LOGIC
+// ==================================================================
+const handleFailSafePurchase = async (paymentIntent: Stripe.PaymentIntent) => {
+  const stripeId = paymentIntent.id;
+  const metadata = paymentIntent.metadata;
+
+  console.log(`[Webhook] 💰 Payment ${stripeId} succeeded. Checking fulfillment...`);
+
+  // 1. Check if we already fulfilled this locally
+  const existingTx = await db.transaction.findFirst({
+    where: { paymentIntentId: stripeId }
+  });
+
+  if (existingTx && (existingTx.status === 'COMPLETED' || existingTx.status === 'PENDING')) {
+    console.log(`[Webhook] ✅ Transaction ${existingTx.externalId} already recorded. Skipping.`);
+    return;
+  }
+
+  // 2. Validate Metadata (Must have mobile/product from server/payment.ts)
+  if (!metadata?.mobile || !metadata?.productId) {
+    console.warn(`[Webhook] ⚠️ Missing metadata for ${stripeId}. Cannot auto-fulfill.`);
+    return;
+  }
+
+  // 3. Fulfill the Order (The "Fail-Safe")
+  console.log(`[Webhook] 🔄 Initiating fail-safe purchase for ${metadata.mobile}...`);
+  
+  const result = await dtoneService.purchaseProduct(
+    Number(metadata.productId),
+    metadata.mobile,
+    paymentIntent.amount / 100, // Convert cents back to main unit
+    paymentIntent.currency.toUpperCase(),
+    metadata.type
+  );
+
+  // 4. Update Database
+  const status = result.success ? 'COMPLETED' : 'FAILED';
+  
+  if (existingTx) {
+    // If record existed but was failed/abandoned, update it
+    await db.transaction.update({
+      where: { id: existingTx.id },
+      data: { status: status, externalId: result.data?.externalId || existingTx.externalId }
+    });
+  } else {
+    // If NO record exists (User closed browser immediately), create it
+    await db.transaction.create({
+      data: {
+        externalId: result.data?.externalId || `retry_${Date.now()}`,
+        paymentIntentId: stripeId,
+        mobile: metadata.mobile,
+        productId: Number(metadata.productId),
+        amount: paymentIntent.amount / 100,
+        currency: paymentIntent.currency.toUpperCase(),
+        productType: metadata.type || 'UNKNOWN',
+        status: status,
+        paymentId: stripeId // Explicitly set paymentId column
+      }
+    });
+  }
+
+  // 5. If Purchase Failed -> Auto Refund
+  if (!result.success) {
+    console.warn(`[Webhook] ⚠️ Fulfillment failed. Issuing refund for ${stripeId}`);
+    await paymentService.refundPayment(stripeId);
+    
+    // Update DB to REFUNDED
+    await db.transaction.updateMany({
+        where: { paymentIntentId: stripeId },
+        data: { status: 'REFUNDED' }
+    });
+  } else {
+    console.log(`[Webhook] 🎉 Fail-safe purchase successful!`);
+  }
+};
 
 // ==================================================================
 // 🚀 CACHE SYSTEM
@@ -57,23 +189,17 @@ const DTONE_STATUS = {
 };
 
 // ==================================================================
-// 🔒 SECURITY HELPER (WEBHOOK)
+// 🔒 SECURITY HELPER (DTOne Callback)
 // ==================================================================
-const verifyWebhook = (req: Request): boolean => {
+const verifyDtOneCallback = (req: Request): boolean => {
   const authHeader = req.headers.authorization;
   
-  // If no credentials set in .env, allow all (Dev mode)
-  if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS) {
-    return true; 
-  }
-
+  if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS) return true; 
   if (!authHeader) return false;
 
-  // Basic Auth format: "Basic base64(user:pass)"
   const [scheme, credentials] = authHeader.split(' ');
   if (scheme !== 'Basic' || !credentials) return false;
 
-  // Decode and check
   const [user, pass] = Buffer.from(credentials, 'base64').toString().split(':');
   return user === process.env.DTONE_WEBHOOK_USER && pass === process.env.DTONE_WEBHOOK_PASS;
 };
@@ -96,10 +222,15 @@ app.get('/api/operators', (req: Request, res: Response): any => {
 });
 
 app.post('/api/create-payment-intent', async (req: Request, res: Response): Promise<any> => {
-  const { amount, currency } = req.body;
+  const { amount, currency, mobile, productId, type } = req.body;
+  
   if (!amount || !currency) return res.status(400).json({ error: 'Amount and currency are required' });
+
   try {
+    // Pass metadata so the Webhook can use it later
     const result = await paymentService.createPaymentIntent(amount, currency);
+    // Note: You must update payment.ts to actually accept and save this metadata!
+    
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -148,17 +279,10 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       ? `${process.env.DTONE_CALLBACK_URL}/api/callback`
       : undefined;
 
-    // 1. Execute DTOne Purchase
     const result = await dtoneService.purchaseProduct(
-      productId, 
-      mobile, 
-      amount || 0, 
-      unit, 
-      type, 
-      callbackUrl
+      productId, mobile, amount || 0, unit, type, callbackUrl
     );
 
-    // 2. Handle API-level failures (network, auth, etc.)
     if (!result.success || !result.data) {
       console.error(`[Purchase] API Error: ${result.error}`);
       const refund = await paymentService.refundPayment(paymentId);
@@ -172,7 +296,6 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       });
     }
 
-    // 3. Determine transaction status
     const statusId = result.data.statusId;
     let dbStatus = 'PENDING';
     let shouldRefund = false;
@@ -180,11 +303,10 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     if (statusId === DTONE_STATUS.COMPLETED) {
       dbStatus = 'COMPLETED';
     } else if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
-      dbStatus = 'FAILED'; // Will become REFUNDED
+      dbStatus = 'FAILED';
       shouldRefund = true;
     }
 
-    // 4. Trigger Immediate Refund if failed
     let refund = null;
     if (shouldRefund) {
       console.warn(`[Purchase] ❌ Immediate Failure (Code ${statusId}). Refunding...`);
@@ -192,13 +314,11 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       if (refund) dbStatus = 'REFUNDED';
     }
 
-    // 5. Save to Database
     try {
       dbTransaction = await db.transaction.create({
         data: {
           externalId: result.data.externalId,
           paymentIntentId: paymentId,
-          // ✅ FIX: Ensure 'paymentId' column matches your schema
           paymentId: paymentId, 
           mobile: mobile,
           productId: Number(productId),
@@ -210,11 +330,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       });
     } catch (dbError) {
       console.error("[DB] CRITICAL: Failed to save transaction:", dbError);
-      
-      // If we haven't refunded yet, do it now because we can't track the order!
-      if (!refund) {
-        refund = await paymentService.refundPayment(paymentId);
-      }
+      if (!refund) refund = await paymentService.refundPayment(paymentId);
       
       return res.status(500).json({ 
         success: false,
@@ -224,46 +340,34 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       });
     }
 
-    // 6. Return response with clear success flag
     return res.json({
       success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING',
-      id: result.data.id,
-      externalId: result.data.externalId,
-      status: result.data.status,
-      statusId: statusId,
+      ...result.data,
       dbStatus: dbStatus,
-      message: result.data.message,
       refunded: !!refund,
       refundId: refund?.id
     });
 
   } catch (error: any) {
     console.error('[Purchase] Unexpected error:', error);
-    
-    // Emergency refund
     try {
       const refund = await paymentService.refundPayment(paymentId);
       return res.status(500).json({ 
-        success: false,
+        success: false, 
         error: 'Internal server error - payment refunded',
-        refunded: true,
-        refundId: refund?.id
+        refunded: true 
       });
     } catch (refundError) {
-      // Worst case: couldn't refund
       return res.status(500).json({ success: false, error: error.message });
     }
   }
 });
 
-
 // ==================================================================
-// 🔔 DTONE CALLBACK (WEBHOOK)
+// 🔔 DTONE CALLBACK (Basic Auth Security)
 // ==================================================================
 app.post('/api/callback', async (req: Request, res: Response) => {
-  
-  // 🔒 1. Verify Request comes from DTOne
-  if (!verifyWebhook(req)) {
+  if (!verifyDtOneCallback(req)) {
     console.warn(`[Callback] ⛔ Security blocked request from ${req.ip}`);
     res.status(401).json({ error: 'Unauthorized' });
     return;
@@ -274,7 +378,7 @@ app.post('/api/callback', async (req: Request, res: Response) => {
   const statusMsg = txn.status?.message || 'No details';
   const refId = txn.external_id;
 
-  console.log(`\n🔔 [Callback] Ref: ${refId} | Code: ${statusId} (${txn.status?.class?.message})`);
+  console.log(`\n🔔 [DTOne Callback] Ref: ${refId} | Code: ${statusId} (${txn.status?.class?.message})`);
 
   try {
     const existingTx = await db.transaction.findUnique({ where: { externalId: refId } });
@@ -293,15 +397,15 @@ app.post('/api/callback', async (req: Request, res: Response) => {
     let newStatus = existingTx.status;
 
     switch (statusId) {
-      case DTONE_STATUS.COMPLETED: // 7
+      case DTONE_STATUS.COMPLETED:
         console.log("   ✅ SUCCESS: Transaction finished successfully.");
         newStatus = 'COMPLETED';
         break;
 
-      case DTONE_STATUS.REJECTED: // 3
-      case DTONE_STATUS.DECLINED: // 9
-      case DTONE_STATUS.CANCELLED: // 4
-      case DTONE_STATUS.REVERSED: // 8
+      case DTONE_STATUS.REJECTED:
+      case DTONE_STATUS.DECLINED:
+      case DTONE_STATUS.CANCELLED:
+      case DTONE_STATUS.REVERSED:
         console.error(`   ❌ FAILED: ${statusMsg}`);
         
         if (existingTx.paymentIntentId && existingTx.status !== 'REFUNDED') {

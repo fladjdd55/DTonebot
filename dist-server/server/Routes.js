@@ -1,4 +1,15 @@
 "use strict";
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -42,6 +53,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var path_1 = __importDefault(require("path"));
+var stripe_1 = __importDefault(require("stripe")); // ✅ Import Stripe directly
 var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
@@ -49,8 +61,150 @@ var payment_1 = require("./payment");
 var db_1 = require("./db");
 var app = (0, express_1.default)();
 var PORT = process.env.PORT || 5000;
+// Initialize Stripe locally for Webhook Verification
+var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
+    apiVersion: '2023-10-16',
+});
 app.use((0, cors_1.default)());
+// ==================================================================
+// 💳 STRIPE WEBHOOK (MUST BE BEFORE express.json)
+// ==================================================================
+// This endpoint catches "Payment Succeeded" events from Stripe directly.
+// It acts as a "Fail-Safe" if the user closes their browser before the frontend finishes.
+app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json' }), // 👈 Catch raw body for signature verification
+function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var sig, webhookSecret, event, paymentIntent, error_1;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                sig = req.headers['stripe-signature'];
+                webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+                if (!webhookSecret) {
+                    console.error('[Stripe Webhook] ⚠️ STRIPE_WEBHOOK_SECRET is missing in .env');
+                    return [2 /*return*/, res.status(500).send('Webhook secret not configured')];
+                }
+                if (!sig) {
+                    return [2 /*return*/, res.status(400).send('Missing signature')];
+                }
+                try {
+                    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+                }
+                catch (err) {
+                    console.error("[Stripe Webhook] \u26A0\uFE0F Signature Error: ".concat(err.message));
+                    return [2 /*return*/, res.status(400).send("Webhook Error: ".concat(err.message))];
+                }
+                _a.label = 1;
+            case 1:
+                _a.trys.push([1, 5, , 6]);
+                if (!(event.type === 'payment_intent.succeeded')) return [3 /*break*/, 3];
+                paymentIntent = event.data.object;
+                return [4 /*yield*/, handleFailSafePurchase(paymentIntent)];
+            case 2:
+                _a.sent();
+                return [3 /*break*/, 4];
+            case 3:
+                if (event.type === 'payment_intent.payment_failed') {
+                    console.log("[Stripe Webhook] \u274C Payment Failed: ".concat(event.data.object.id));
+                }
+                _a.label = 4;
+            case 4:
+                res.json({ received: true });
+                return [3 /*break*/, 6];
+            case 5:
+                error_1 = _a.sent();
+                console.error('[Stripe Webhook] Handler Error:', error_1);
+                res.status(500).send('Webhook handler failed');
+                return [3 /*break*/, 6];
+            case 6: return [2 /*return*/];
+        }
+    });
+}); });
+// ✅ NOW we can enable JSON parsing for all other routes
 app.use(express_1.default.json());
+// ==================================================================
+// 🧠 FAIL-SAFE FULFILLMENT LOGIC
+// ==================================================================
+var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0, void 0, void 0, function () {
+    var stripeId, metadata, existingTx, result, status;
+    var _a, _b;
+    return __generator(this, function (_c) {
+        switch (_c.label) {
+            case 0:
+                stripeId = paymentIntent.id;
+                metadata = paymentIntent.metadata;
+                console.log("[Webhook] \uD83D\uDCB0 Payment ".concat(stripeId, " succeeded. Checking fulfillment..."));
+                return [4 /*yield*/, db_1.db.transaction.findFirst({
+                        where: { paymentIntentId: stripeId }
+                    })];
+            case 1:
+                existingTx = _c.sent();
+                if (existingTx && (existingTx.status === 'COMPLETED' || existingTx.status === 'PENDING')) {
+                    console.log("[Webhook] \u2705 Transaction ".concat(existingTx.externalId, " already recorded. Skipping."));
+                    return [2 /*return*/];
+                }
+                // 2. Validate Metadata (Must have mobile/product from server/payment.ts)
+                if (!(metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || !(metadata === null || metadata === void 0 ? void 0 : metadata.productId)) {
+                    console.warn("[Webhook] \u26A0\uFE0F Missing metadata for ".concat(stripeId, ". Cannot auto-fulfill."));
+                    return [2 /*return*/];
+                }
+                // 3. Fulfill the Order (The "Fail-Safe")
+                console.log("[Webhook] \uD83D\uDD04 Initiating fail-safe purchase for ".concat(metadata.mobile, "..."));
+                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(Number(metadata.productId), metadata.mobile, paymentIntent.amount / 100, // Convert cents back to main unit
+                    paymentIntent.currency.toUpperCase(), metadata.type)];
+            case 2:
+                result = _c.sent();
+                status = result.success ? 'COMPLETED' : 'FAILED';
+                if (!existingTx) return [3 /*break*/, 4];
+                // If record existed but was failed/abandoned, update it
+                return [4 /*yield*/, db_1.db.transaction.update({
+                        where: { id: existingTx.id },
+                        data: { status: status, externalId: ((_a = result.data) === null || _a === void 0 ? void 0 : _a.externalId) || existingTx.externalId }
+                    })];
+            case 3:
+                // If record existed but was failed/abandoned, update it
+                _c.sent();
+                return [3 /*break*/, 6];
+            case 4: 
+            // If NO record exists (User closed browser immediately), create it
+            return [4 /*yield*/, db_1.db.transaction.create({
+                    data: {
+                        externalId: ((_b = result.data) === null || _b === void 0 ? void 0 : _b.externalId) || "retry_".concat(Date.now()),
+                        paymentIntentId: stripeId,
+                        mobile: metadata.mobile,
+                        productId: Number(metadata.productId),
+                        amount: paymentIntent.amount / 100,
+                        currency: paymentIntent.currency.toUpperCase(),
+                        productType: metadata.type || 'UNKNOWN',
+                        status: status,
+                        paymentId: stripeId // Explicitly set paymentId column
+                    }
+                })];
+            case 5:
+                // If NO record exists (User closed browser immediately), create it
+                _c.sent();
+                _c.label = 6;
+            case 6:
+                if (!!result.success) return [3 /*break*/, 9];
+                console.warn("[Webhook] \u26A0\uFE0F Fulfillment failed. Issuing refund for ".concat(stripeId));
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(stripeId)];
+            case 7:
+                _c.sent();
+                // Update DB to REFUNDED
+                return [4 /*yield*/, db_1.db.transaction.updateMany({
+                        where: { paymentIntentId: stripeId },
+                        data: { status: 'REFUNDED' }
+                    })];
+            case 8:
+                // Update DB to REFUNDED
+                _c.sent();
+                return [3 /*break*/, 10];
+            case 9:
+                console.log("[Webhook] \uD83C\uDF89 Fail-safe purchase successful!");
+                _c.label = 10;
+            case 10: return [2 /*return*/];
+        }
+    });
+}); };
 // ==================================================================
 // 🚀 CACHE SYSTEM
 // ==================================================================
@@ -107,21 +261,17 @@ var DTONE_STATUS = {
     DECLINED: 9
 };
 // ==================================================================
-// 🔒 SECURITY HELPER (WEBHOOK)
+// 🔒 SECURITY HELPER (DTOne Callback)
 // ==================================================================
-var verifyWebhook = function (req) {
+var verifyDtOneCallback = function (req) {
     var authHeader = req.headers.authorization;
-    // If no credentials set in .env, allow all (Dev mode)
-    if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS) {
+    if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS)
         return true;
-    }
     if (!authHeader)
         return false;
-    // Basic Auth format: "Basic base64(user:pass)"
     var _a = authHeader.split(' '), scheme = _a[0], credentials = _a[1];
     if (scheme !== 'Basic' || !credentials)
         return false;
-    // Decode and check
     var _b = Buffer.from(credentials, 'base64').toString().split(':'), user = _b[0], pass = _b[1];
     return user === process.env.DTONE_WEBHOOK_USER && pass === process.env.DTONE_WEBHOOK_PASS;
 };
@@ -140,11 +290,11 @@ app.get('/api/operators', function (req, res) {
     return res.json(OPERATOR_CACHE);
 });
 app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, amount, currency, result, error_1;
+    var _a, amount, currency, mobile, productId, type, result, error_2;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, amount = _a.amount, currency = _a.currency;
+                _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
                 if (!amount || !currency)
                     return [2 /*return*/, res.status(400).json({ error: 'Amount and currency are required' })];
                 _b.label = 1;
@@ -153,18 +303,19 @@ app.post('/api/create-payment-intent', function (req, res) { return __awaiter(vo
                 return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency)];
             case 2:
                 result = _b.sent();
+                // Note: You must update payment.ts to actually accept and save this metadata!
                 res.json(result);
                 return [3 /*break*/, 4];
             case 3:
-                error_1 = _b.sent();
-                res.status(500).json({ error: error_1.message });
+                error_2 = _b.sent();
+                res.status(500).json({ error: error_2.message });
                 return [3 /*break*/, 4];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var mobile, result, error_2;
+    var mobile, result, error_3;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -182,14 +333,14 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
                 }
                 return [2 /*return*/, res.json(result.data)];
             case 3:
-                error_2 = _a.sent();
-                return [2 /*return*/, res.status(500).json({ error: error_2.message })];
+                error_3 = _a.sent();
+                return [2 /*return*/, res.status(500).json({ error: error_3.message })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var operatorId, result, error_3;
+    var operatorId, result, error_4;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -207,14 +358,14 @@ app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0,
                 }
                 return [2 /*return*/, res.json(result.data)];
             case 3:
-                error_3 = _a.sent();
-                return [2 /*return*/, res.status(500).json({ error: error_3.message })];
+                error_4 = _a.sent();
+                return [2 /*return*/, res.status(500).json({ error: error_4.message })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, dbTransaction, callbackUrl, result, refund_1, statusId, dbStatus, shouldRefund, refund, dbError_1, error_4, refund, refundError_1;
+    var _a, productId, mobile, amount, unit, paymentId, type, dbTransaction, callbackUrl, result, refund_1, statusId, dbStatus, shouldRefund, refund, dbError_1, error_5, refund, refundError_1;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -252,7 +403,7 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     dbStatus = 'COMPLETED';
                 }
                 else if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
-                    dbStatus = 'FAILED'; // Will become REFUNDED
+                    dbStatus = 'FAILED';
                     shouldRefund = true;
                 }
                 refund = null;
@@ -270,7 +421,6 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                         data: {
                             externalId: result.data.externalId,
                             paymentIntentId: paymentId,
-                            // ✅ FIX: Ensure 'paymentId' column matches your schema
                             paymentId: paymentId,
                             mobile: mobile,
                             productId: Number(productId),
@@ -297,22 +447,10 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     refunded: true,
                     refundId: refund === null || refund === void 0 ? void 0 : refund.id
                 })];
-            case 11: 
-            // 6. Return response with clear success flag
-            return [2 /*return*/, res.json({
-                    success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING',
-                    id: result.data.id,
-                    externalId: result.data.externalId,
-                    status: result.data.status,
-                    statusId: statusId,
-                    dbStatus: dbStatus,
-                    message: result.data.message,
-                    refunded: !!refund,
-                    refundId: refund === null || refund === void 0 ? void 0 : refund.id
-                })];
+            case 11: return [2 /*return*/, res.json(__assign(__assign({ success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }, result.data), { dbStatus: dbStatus, refunded: !!refund, refundId: refund === null || refund === void 0 ? void 0 : refund.id }))];
             case 12:
-                error_4 = _b.sent();
-                console.error('[Purchase] Unexpected error:', error_4);
+                error_5 = _b.sent();
+                console.error('[Purchase] Unexpected error:', error_5);
                 _b.label = 13;
             case 13:
                 _b.trys.push([13, 15, , 16]);
@@ -322,20 +460,18 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 return [2 /*return*/, res.status(500).json({
                         success: false,
                         error: 'Internal server error - payment refunded',
-                        refunded: true,
-                        refundId: refund === null || refund === void 0 ? void 0 : refund.id
+                        refunded: true
                     })];
             case 15:
                 refundError_1 = _b.sent();
-                // Worst case: couldn't refund
-                return [2 /*return*/, res.status(500).json({ success: false, error: error_4.message })];
+                return [2 /*return*/, res.status(500).json({ success: false, error: error_5.message })];
             case 16: return [3 /*break*/, 17];
             case 17: return [2 /*return*/];
         }
     });
 }); });
 // ==================================================================
-// 🔔 DTONE CALLBACK (WEBHOOK)
+// 🔔 DTONE CALLBACK (Basic Auth Security)
 // ==================================================================
 app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var txn, statusId, statusMsg, refId, existingTx, newStatus, _a, e_2;
@@ -343,8 +479,7 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
     return __generator(this, function (_g) {
         switch (_g.label) {
             case 0:
-                // 🔒 1. Verify Request comes from DTOne
-                if (!verifyWebhook(req)) {
+                if (!verifyDtOneCallback(req)) {
                     console.warn("[Callback] \u26D4 Security blocked request from ".concat(req.ip));
                     res.status(401).json({ error: 'Unauthorized' });
                     return [2 /*return*/];
@@ -353,7 +488,7 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
                 statusId = (_c = (_b = txn.status) === null || _b === void 0 ? void 0 : _b.class) === null || _c === void 0 ? void 0 : _c.id;
                 statusMsg = ((_d = txn.status) === null || _d === void 0 ? void 0 : _d.message) || 'No details';
                 refId = txn.external_id;
-                console.log("\n\uD83D\uDD14 [Callback] Ref: ".concat(refId, " | Code: ").concat(statusId, " (").concat((_f = (_e = txn.status) === null || _e === void 0 ? void 0 : _e.class) === null || _f === void 0 ? void 0 : _f.message, ")"));
+                console.log("\n\uD83D\uDD14 [DTOne Callback] Ref: ".concat(refId, " | Code: ").concat(statusId, " (").concat((_f = (_e = txn.status) === null || _e === void 0 ? void 0 : _e.class) === null || _f === void 0 ? void 0 : _f.message, ")"));
                 _g.label = 1;
             case 1:
                 _g.trys.push([1, 11, , 12]);

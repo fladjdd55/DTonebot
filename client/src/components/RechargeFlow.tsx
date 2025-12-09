@@ -10,6 +10,19 @@ import { filterCountries, type Country } from '../shared/countryValidator';
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 
+// ✅ CONFIG: Read from .env or default to 5
+const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_USD_ORDER) || 5;
+
+// Helper to filter out small USD products from the UI
+const isProductEligible = (p: Product) => {
+  // If not USD, we assume it's valid
+  if (p.currency !== 'USD') return true;
+
+  // Parse "5.00 USD" -> 5.00
+  const price = parseFloat(p.amount.split(' ')[0]);
+  return price >= MIN_USD_AMOUNT;
+};
+
 export default function RechargeFlow() {
   const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1); 
   
@@ -55,7 +68,7 @@ export default function RechargeFlow() {
   }, [products]);
 
   const rangedProduct = useMemo(() => {
-    return categorizedProducts.AIRTIME.find(p => p.type === 'RANGED_VALUE_RECHARGE');
+    return categorizedProducts.AIRTIME.find(p => p.type === 'RANGED_VALUE_RECHARGE' || p.type === 'RANGED_VALUE_PIN');
   }, [categorizedProducts.AIRTIME]);
 
   const operatorCountryName = useMemo(() => {
@@ -163,17 +176,39 @@ export default function RechargeFlow() {
 
     let finalAmount = amount || 0;
     
-    if (product.type !== 'RANGED_VALUE_RECHARGE') {
+    // 1. Determine Amount (Fixed vs Ranged)
+    if (product.type !== 'RANGED_VALUE_RECHARGE' && product.type !== 'RANGED_VALUE_PIN') {
       const priceString = product.amount.split(' ')[0]; 
       finalAmount = parseFloat(priceString);
-    } else {
-      if (!finalAmount || finalAmount < product.min || finalAmount > product.max) {
-        setApiError(`Amount must be between ${product.min} and ${product.max}`);
+    } 
+
+    // 2. ✅ CALCULATE EFFECTIVE MINIMUM (The Smart Logic)
+    // If USD, take the higher of (Your Limit vs Operator Limit). 
+    // If not USD, just use Operator Limit.
+    const effectiveMin = product.currency === 'USD' 
+      ? Math.max(product.min, MIN_USD_AMOUNT) 
+      : product.min;
+
+    // 3. ✅ UNIFIED CHECK
+    // This handles BOTH cases:
+    // - User tries $3 (blocked by your $5 limit)
+    // - User tries $8 on a $10 product (blocked by operator's $10 limit)
+    if (product.type === 'RANGED_VALUE_RECHARGE' || product.type === 'RANGED_VALUE_PIN') {
+       if (!finalAmount || finalAmount < effectiveMin || finalAmount > product.max) {
+        setApiError(`Amount must be between ${effectiveMin} and ${product.max} ${product.currency}`);
         setIsPurchasing(false);
         return;
       }
+    } else {
+        // For Fixed products, we just check the minimum
+        if (finalAmount < effectiveMin) {
+            setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
+            setIsPurchasing(false);
+            return;
+        }
     }
 
+    // 4. Proceed to Modal
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
     
@@ -214,8 +249,9 @@ export default function RechargeFlow() {
       setStep(3); 
       
     } catch (err: any) {
-      // ✅ Keep modal OPEN so user can see the specific error
-      setApiError(err.message || "Transaction failed. Please try again.");
+      console.error("Transaction Error:", err);
+      // ✅ THROW error so PaymentModal catches it and stops spinning
+      throw err;
     } finally {
       setLoading(false);
     }
@@ -448,7 +484,14 @@ export default function RechargeFlow() {
                             type="number"
                             value={customAmount}
                             onChange={(e) => setCustomAmount(e.target.value)}
-                            placeholder={`${rangedProduct.min} - ${rangedProduct.max}`}
+                            
+                            // ✅ DISPLAY THE EFFECTIVE MINIMUM (Smart Placeholder)
+                            placeholder={`${
+                              rangedProduct.currency === 'USD' 
+                                ? Math.max(rangedProduct.min, MIN_USD_AMOUNT) 
+                                : rangedProduct.min
+                            } - ${rangedProduct.max}`}
+                            
                             className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
                           />
                           <button 
@@ -460,18 +503,25 @@ export default function RechargeFlow() {
                           </button>
                         </div>
                         <p className="text-xs text-indigo-400 mt-1">
-                          Range: {rangedProduct.min} - {rangedProduct.max} {rangedProduct.currency}
+                          Range: {rangedProduct.currency === 'USD' 
+                                ? Math.max(rangedProduct.min, MIN_USD_AMOUNT) 
+                                : rangedProduct.min} 
+                          - {rangedProduct.max} {rangedProduct.currency}
                         </p>
                       </div>
                     )}
 
                     <div className="space-y-2">
-                      {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE').length > 0 && 
+                      {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE' && p.type !== 'RANGED_VALUE_PIN').length > 0 && 
                         <p className="text-xs text-gray-400 font-bold uppercase mt-2">Fixed Amounts</p>
                       }
                       
                       <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                        {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE').map(p => (
+                        {categorizedProducts.AIRTIME
+                          .filter(p => p.type !== 'RANGED_VALUE_RECHARGE' && p.type !== 'RANGED_VALUE_PIN')
+                          // ✅ FILTER: Hide cheap fixed products if they are USD
+                          .filter(isProductEligible)
+                          .map(p => (
                           <button 
                             key={p.id} 
                             onClick={() => handlePurchase(p)} 
