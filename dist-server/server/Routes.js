@@ -1,15 +1,4 @@
 "use strict";
-var __assign = (this && this.__assign) || function () {
-    __assign = Object.assign || function(t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
-                t[p] = s[p];
-        }
-        return t;
-    };
-    return __assign.apply(this, arguments);
-};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -225,83 +214,123 @@ app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0,
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
+    var _a, productId, mobile, amount, unit, paymentId, type, dbTransaction, callbackUrl, result, refund_1, statusId, dbStatus, shouldRefund, refund, dbError_1, error_4, refund, refundError_1;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
                 _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId, type = _a.type;
-                if (!productId || !mobile)
-                    return [2 /*return*/, res.status(400).json({ error: 'Missing fields' })];
+                if (!productId || !mobile || !paymentId) {
+                    return [2 /*return*/, res.status(400).json({ error: 'Missing required fields' })];
+                }
+                dbTransaction = null;
                 _b.label = 1;
             case 1:
-                _b.trys.push([1, 13, , 14]);
+                _b.trys.push([1, 12, , 17]);
                 callbackUrl = process.env.DTONE_CALLBACK_URL
                     ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/callback")
                     : undefined;
-                if (callbackUrl)
-                    console.log("[Purchase] Attaching Callback: ".concat(callbackUrl));
                 return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl)];
             case 2:
                 result = _b.sent();
-                if (!(!result.success || !result.data)) return [3 /*break*/, 5];
-                if (!paymentId) return [3 /*break*/, 4];
+                if (!(!result.success || !result.data)) return [3 /*break*/, 4];
+                console.error("[Purchase] API Error: ".concat(result.error));
                 return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
             case 3:
-                _b.sent();
-                _b.label = 4;
-            case 4: return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
-            case 5:
+                refund_1 = _b.sent();
+                return [2 /*return*/, res.status(400).json({
+                        success: false,
+                        error: result.error,
+                        code: result.code,
+                        refunded: !!refund_1,
+                        refundId: refund_1 === null || refund_1 === void 0 ? void 0 : refund_1.id
+                    })];
+            case 4:
                 statusId = result.data.statusId;
                 dbStatus = 'PENDING';
-                if (statusId === DTONE_STATUS.COMPLETED)
+                shouldRefund = false;
+                if (statusId === DTONE_STATUS.COMPLETED) {
                     dbStatus = 'COMPLETED';
-                if (!(statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED)) return [3 /*break*/, 8];
-                console.error("[Purchase] \u274C Immediate Failure (Code ".concat(statusId, "): ").concat(result.data.status));
-                if (!paymentId) return [3 /*break*/, 7];
+                }
+                else if (statusId === DTONE_STATUS.REJECTED || statusId === DTONE_STATUS.DECLINED) {
+                    dbStatus = 'FAILED'; // Will become REFUNDED
+                    shouldRefund = true;
+                }
+                refund = null;
+                if (!shouldRefund) return [3 /*break*/, 6];
+                console.warn("[Purchase] \u274C Immediate Failure (Code ".concat(statusId, "). Refunding..."));
                 return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 5:
+                refund = _b.sent();
+                if (refund)
+                    dbStatus = 'REFUNDED';
+                _b.label = 6;
             case 6:
-                _b.sent();
-                dbStatus = 'REFUNDED';
-                return [3 /*break*/, 8];
-            case 7:
-                dbStatus = 'FAILED';
-                _b.label = 8;
-            case 8:
-                ;
-                _b.label = 9;
-            case 9:
-                _b.trys.push([9, 11, , 12]);
+                _b.trys.push([6, 8, , 11]);
                 return [4 /*yield*/, db_1.db.transaction.create({
                         data: {
                             externalId: result.data.externalId,
-                            // ✅ FIX 1: Add 'paymentId' (Required by your schema)
-                            paymentId: paymentId || "N/A",
-                            // Optional: Keep paymentIntentId if your schema still has it
-                            paymentIntentId: paymentId || null,
+                            paymentIntentId: paymentId,
+                            // ✅ FIX: Ensure 'paymentId' column matches your schema
+                            paymentId: paymentId,
                             mobile: mobile,
                             productId: Number(productId),
                             amount: Number(amount || 0),
-                            // ✅ FIX 2: Add 'currency'
                             currency: unit || 'UNKNOWN',
-                            // ✅ FIX 3: Add 'productType' (Required by your schema)
                             productType: type || 'UNKNOWN',
                             status: dbStatus
                         }
                     })];
-            case 10:
-                _b.sent();
-                return [3 /*break*/, 12];
-            case 11:
+            case 7:
+                dbTransaction = _b.sent();
+                return [3 /*break*/, 11];
+            case 8:
                 dbError_1 = _b.sent();
-                console.error("[DB] Failed to save transaction:", dbError_1);
-                return [3 /*break*/, 12];
-            case 12: 
-            // 5. Return result
-            return [2 /*return*/, res.json(__assign(__assign({}, result.data), { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }))];
-            case 13:
+                console.error("[DB] CRITICAL: Failed to save transaction:", dbError_1);
+                if (!!refund) return [3 /*break*/, 10];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 9:
+                refund = _b.sent();
+                _b.label = 10;
+            case 10: return [2 /*return*/, res.status(500).json({
+                    success: false,
+                    error: 'Database error - payment has been refunded',
+                    refunded: true,
+                    refundId: refund === null || refund === void 0 ? void 0 : refund.id
+                })];
+            case 11: 
+            // 6. Return response with clear success flag
+            return [2 /*return*/, res.json({
+                    success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING',
+                    id: result.data.id,
+                    externalId: result.data.externalId,
+                    status: result.data.status,
+                    statusId: statusId,
+                    dbStatus: dbStatus,
+                    message: result.data.message,
+                    refunded: !!refund,
+                    refundId: refund === null || refund === void 0 ? void 0 : refund.id
+                })];
+            case 12:
                 error_4 = _b.sent();
-                return [2 /*return*/, res.status(500).json({ error: error_4.message })];
-            case 14: return [2 /*return*/];
+                console.error('[Purchase] Unexpected error:', error_4);
+                _b.label = 13;
+            case 13:
+                _b.trys.push([13, 15, , 16]);
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 14:
+                refund = _b.sent();
+                return [2 /*return*/, res.status(500).json({
+                        success: false,
+                        error: 'Internal server error - payment refunded',
+                        refunded: true,
+                        refundId: refund === null || refund === void 0 ? void 0 : refund.id
+                    })];
+            case 15:
+                refundError_1 = _b.sent();
+                // Worst case: couldn't refund
+                return [2 /*return*/, res.status(500).json({ success: false, error: error_4.message })];
+            case 16: return [3 /*break*/, 17];
+            case 17: return [2 /*return*/];
         }
     });
 }); });
