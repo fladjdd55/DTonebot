@@ -54,10 +54,10 @@ function CheckoutForm({ onSuccess }: { onSuccess: (paymentId: string) => void })
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        onSuccess(paymentIntent.id); // ✅ Pass payment intent ID
+        await onSuccess(paymentIntent.id); // ✅ Pass payment intent ID
+      
       } else {
         setMessage(`Payment status: ${paymentIntent?.status}`);
-        setIsProcessing(false);
       }
     } catch (err: any) {
       console.error("Payment Error:", err);

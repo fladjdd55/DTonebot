@@ -206,11 +206,12 @@ app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0,
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
+    var _a, productId, mobile, amount, unit, type, paymentId, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId;
+                console.log("📥 Incoming Purchase Request:", req.body);
+                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, type = _a.type, paymentId = _a.paymentId;
                 if (!productId || !mobile)
                     return [2 /*return*/, res.status(400).json({ error: 'Missing fields' })];
                 _b.label = 1;
@@ -221,7 +222,7 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     : undefined;
                 if (callbackUrl)
                     console.log("[Purchase] Attaching Callback: ".concat(callbackUrl));
-                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, callbackUrl)];
+                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl)];
             case 2:
                 result = _b.sent();
                 if (!(!result.success || !result.data)) return [3 /*break*/, 5];
@@ -255,6 +256,9 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 return [4 /*yield*/, db_1.db.transaction.create({
                         data: {
                             externalId: result.data.externalId,
+                            paymentId: paymentId || null, // Fix: Use 'paymentId' field as per schema error
+                            productType: type, // Fix: Add 'productType' field
+                            currency: unit, // Fix: Add 'currency' field (which is 'unit')
                             paymentIntentId: paymentId || null,
                             mobile: mobile,
                             productId: Number(productId),

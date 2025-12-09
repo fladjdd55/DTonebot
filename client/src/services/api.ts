@@ -39,11 +39,11 @@ export const rechargeApi = {
   },
 
   // ✅ FIX: Added 'paymentId' as the 5th optional parameter
-  async purchase(productId: number, mobile: string, amount: number, unit: string, paymentId?: string) {
+  async purchase(productId: number, mobile: string, amount: number, unit: string, type: string,  paymentId?: string) {
     const res = await fetch(`${API_URL}/purchase`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, mobile, amount, unit, paymentId })
+      body: JSON.stringify({ productId, mobile, amount, unit, type,  paymentId })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');

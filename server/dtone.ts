@@ -30,9 +30,23 @@ if (DTONE_MODE === 'production') {
 // 2. UTILITY FUNCTIONS
 // ==========================================
 
+// Helper function to clean and format mobile number for DTOne (E.164)
+function formatMobileForDtOne(mobile: string): string {
+    // Remove spaces, dashes, and parentheses
+    let cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
+    
+    // Ensure the '+' sign is present at the start
+    if (!cleanMobile.startsWith('+')) {
+      cleanMobile = `+${cleanMobile}`;
+    }
+    return cleanMobile;
+}
+
+// ✅ FIX: Update Validation Logic to strictly check for E.164
 function validateMobileNumber(mobile: string): boolean {
-  const cleanNumber = mobile.replace(/[\s-]/g, '');
-  return /^\+?[1-9]\d{1,14}$/.test(cleanNumber);
+  // Mobile is expected to be cleaned and start with '+'.
+  // DTOne requires E.164 format: ^\+[1-9][0-9]{6,14}$
+  return /^\+[1-9][0-9]{6,14}$/.test(mobile);
 }
 
 function generateTransactionId(): string {
@@ -41,9 +55,17 @@ function generateTransactionId(): string {
   return `txn_${timestamp}_${randomStr}`;
 }
 
+// ✅ FIX: Add deep logging to see full DTOne error details
 function handleApiError(error: any, context: string): { error: string, code: string } {
   const msg = error.response?.data?.errors?.[0]?.message || error.message || 'Unknown error';
   
+  // Log the full API response body if available for debugging
+  if (error.response?.data) {
+     console.error(`❌ [DTOne ${context}] Full API Error Response:`, JSON.stringify(error.response.data, null, 2));
+  } else {
+     console.error(`❌ [DTOne ${context}] Error:`, error.message);
+  }
+
   if (error.status === 401 || error.response?.status === 401) {
     console.error('[DTOne] ❌ AUTH ERROR: Check Credentials');
     return { error: 'Authentication failed', code: 'AUTH_ERROR' };
@@ -122,10 +144,13 @@ export const dtoneService = {
   // B. LOOKUP MOBILE NUMBER
   // ----------------------------------------
   async lookupMobileNumber(mobile: string): Promise<ApiResponse<LookupResult>> {
-    const cleanMobile = mobile.replace(/[\s-]/g, '');
+    
+    const cleanMobile = formatMobileForDtOne(mobile); // ✅ FIX: Format for E.164
+
+    console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
 
     if (!validateMobileNumber(cleanMobile)) {
-      return { success: false, error: 'Invalid format', code: 'INVALID_MOBILE' };
+      return { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' };
     }
 
     try {
@@ -209,28 +234,38 @@ export const dtoneService = {
   // ----------------------------------------
   // D. PURCHASE
   // ----------------------------------------
-  async purchaseProduct(productId: number, mobile: string, amount: number, unit?: string, callbackUrl?: string): Promise<ApiResponse<TransactionResult>> {
-    const cleanMobile = mobile.replace(/[\s-]/g, '');
+  async purchaseProduct(
+    productId: number, 
+    mobile: string, 
+    amount: number, 
+    unit?: string, 
+    type?: string, // Added for correct RANGED product handling
+    callbackUrl?: string
+  ): Promise<ApiResponse<TransactionResult>> {
+    
+    const cleanMobile = formatMobileForDtOne(mobile); // ✅ FIX: Format for E.164
 
     if (!validateMobileNumber(cleanMobile)) {
-      return { success: false, error: 'Invalid mobile number', code: 'INVALID_MOBILE' };
+      return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
     }
 
     const externalId = generateTransactionId();
-    console.log(`[DTOne] Purchasing Product ${productId} [Ref: ${externalId}]...`);
+    console.log(`[DTOne] Purchasing Product ${productId} for ${cleanMobile} [Ref: ${externalId}]...`);
 
     try {
       const payload: any = {
         external_id: externalId,
         product_id: productId,
-        credit_party_identifier: { mobile_number: cleanMobile },
+        credit_party_identifier: { mobile_number: cleanMobile }, // Sending E.164
         auto_confirm: true,
-	callback_url: callbackUrl
+	      callback_url: callbackUrl
       };
 
-            // ✅ FIX: Only add calculation_mode if BOTH amount and unit are present.
-      // If unit is missing, we assume it's a Fixed Product (value implied by ID) and proceed.
-      if (amount > 0 && unit) {
+      // Check if this is a Ranged product
+      const isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
+      
+      // ✅ FIX: Only add destination for Ranged products if we have amount/unit
+      if (isRanged && amount > 0 && unit) {
         payload.calculation_mode = 'DESTINATION_AMOUNT';
         payload.destination = {
           unit_type: 'CURRENCY',
@@ -238,6 +273,8 @@ export const dtoneService = {
           amount: amount
         };
       }
+      
+      console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
 
 
       const response = await dtone.postTransactionSync(payload);
@@ -247,7 +284,7 @@ export const dtoneService = {
         success: true,
         data: {
           id: data.id,
-	  statusId: data.status?.class?.id,
+	        statusId: data.status?.class?.id,
           status: data.status?.message || data.status,
           externalId: data.external_id,
           message: data.status?.message
@@ -270,7 +307,8 @@ export const dtoneService = {
     if (!lookup.success) return lookup; 
 
     console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
-    return await dtoneService.purchaseProduct(productId, mobile, amount);
+    // Note: The 'type' argument is intentionally omitted here as it's not needed for the simple topup flow.
+    return await dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined); 
   },
 
   // ----------------------------------------

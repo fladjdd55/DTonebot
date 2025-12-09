@@ -173,7 +173,6 @@ export default function RechargeFlow() {
     const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
-    setIsPayModalOpen(false); 
     setLoading(true); 
 
     try {
@@ -183,6 +182,7 @@ export default function RechargeFlow() {
         pendingTxn.mobile,           // 2. Mobile Number (Saved from handlePurchase)
         pendingTxn.amount,           // 3. Amount
         pendingTxn.product.currency, // 4. Currency Unit
+        pendingTxn.product.type,     // 5. 👈 NEW: Product Type (e.g., "FIXED_VALUE_RECHARGE")
         paymentId                    // 5. Payment ID
       );
 
@@ -197,9 +197,13 @@ export default function RechargeFlow() {
       throw new Error(result.status || 'Transaction Failed');
     }
       setTxnResult(result);
+      // ✅ NOW we can close the modal safely
+      setIsPayModalOpen(false);
       setStep(3); 
     } catch (err: any) {
       setApiError(err.message || "Transaction failed. A refund has been issued.");
+      // Even on error, we close it now
+      setIsPayModalOpen(false);
     } finally {
       setLoading(false);
     }

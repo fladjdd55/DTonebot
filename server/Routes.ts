@@ -113,7 +113,8 @@ app.post('/api/products', async (req: Request, res: Response): Promise<any> => {
 });
 
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
-  const { productId, mobile, amount, unit, paymentId } = req.body;
+  console.log("📥 Incoming Purchase Request:", req.body);
+  const { productId, mobile, amount, unit, type, paymentId } = req.body;
 
   if (!productId || !mobile) return res.status(400).json({ error: 'Missing fields' });
 
@@ -125,7 +126,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     if (callbackUrl) console.log(`[Purchase] Attaching Callback: ${callbackUrl}`);
 
     // 1. Execute Purchase
-    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, callbackUrl);
+    const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type,  callbackUrl);
 
     // 2. Handle API Errors (Network/Auth)
     if (!result.success || !result.data) {
@@ -155,6 +156,9 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       await db.transaction.create({
         data: {
           externalId: result.data.externalId,
+	  paymentId: paymentId || null,     // Fix: Use 'paymentId' field as per schema error
+          productType: type,                // Fix: Add 'productType' field
+          currency: unit,                   // Fix: Add 'currency' field (which is 'unit')
           paymentIntentId: paymentId || null,
           mobile: mobile,
           productId: Number(productId),

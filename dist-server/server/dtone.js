@@ -74,24 +74,44 @@ else {
 // ==========================================
 // 2. UTILITY FUNCTIONS
 // ==========================================
+// Helper function to clean and format mobile number for DTOne (E.164)
+function formatMobileForDtOne(mobile) {
+    // Remove spaces, dashes, and parentheses
+    var cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
+    // Ensure the '+' sign is present at the start
+    if (!cleanMobile.startsWith('+')) {
+        cleanMobile = "+".concat(cleanMobile);
+    }
+    return cleanMobile;
+}
+// ✅ FIX: Update Validation Logic to strictly check for E.164
 function validateMobileNumber(mobile) {
-    var cleanNumber = mobile.replace(/[\s-]/g, '');
-    return /^\+?[1-9]\d{1,14}$/.test(cleanNumber);
+    // Mobile is expected to be cleaned and start with '+'.
+    // DTOne requires E.164 format: ^\+[1-9][0-9]{6,14}$
+    return /^\+[1-9][0-9]{6,14}$/.test(mobile);
 }
 function generateTransactionId() {
     var timestamp = Date.now();
     var randomStr = Math.random().toString(36).substr(2, 9);
     return "txn_".concat(timestamp, "_").concat(randomStr);
 }
+// ✅ FIX: Add deep logging to see full DTOne error details
 function handleApiError(error, context) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     var msg = ((_d = (_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.message) || error.message || 'Unknown error';
-    if (error.status === 401 || ((_e = error.response) === null || _e === void 0 ? void 0 : _e.status) === 401) {
+    // Log the full API response body if available for debugging
+    if ((_e = error.response) === null || _e === void 0 ? void 0 : _e.data) {
+        console.error("\u274C [DTOne ".concat(context, "] Full API Error Response:"), JSON.stringify(error.response.data, null, 2));
+    }
+    else {
+        console.error("\u274C [DTOne ".concat(context, "] Error:"), error.message);
+    }
+    if (error.status === 401 || ((_f = error.response) === null || _f === void 0 ? void 0 : _f.status) === 401) {
         console.error('[DTOne] ❌ AUTH ERROR: Check Credentials');
         return { error: 'Authentication failed', code: 'AUTH_ERROR' };
     }
     console.error("[DTOne] ".concat(context, " Failed: ").concat(msg));
-    if (error.status === 422 || ((_f = error.response) === null || _f === void 0 ? void 0 : _f.status) === 422) {
+    if (error.status === 422 || ((_g = error.response) === null || _g === void 0 ? void 0 : _g.status) === 422) {
         return { error: msg, code: 'VALIDATION_ERROR' };
     }
     return { error: msg, code: 'API_ERROR' };
@@ -176,9 +196,10 @@ exports.dtoneService = {
             return __generator(this, function (_b) {
                 switch (_b.label) {
                     case 0:
-                        cleanMobile = mobile.replace(/[\s-]/g, '');
+                        cleanMobile = formatMobileForDtOne(mobile);
+                        console.log("[DTOne] Looking up operator for: ".concat(cleanMobile));
                         if (!validateMobileNumber(cleanMobile)) {
-                            return [2 /*return*/, { success: false, error: 'Invalid format', code: 'INVALID_MOBILE' }];
+                            return [2 /*return*/, { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' }];
                         }
                         _b.label = 1;
                     case 1:
@@ -269,32 +290,33 @@ exports.dtoneService = {
     // ----------------------------------------
     // D. PURCHASE
     // ----------------------------------------
-    purchaseProduct: function (productId, mobile, amount, unit, callbackUrl) {
+    purchaseProduct: function (productId, mobile, amount, unit, type, // Added for correct RANGED product handling
+    callbackUrl) {
         return __awaiter(this, void 0, void 0, function () {
-            var cleanMobile, externalId, payload, response, data, error_4, err;
+            var cleanMobile, externalId, payload, isRanged, response, data, error_4, err;
             var _a, _b, _c, _d;
             return __generator(this, function (_e) {
                 switch (_e.label) {
                     case 0:
-                        cleanMobile = mobile.replace(/[\s-]/g, '');
+                        cleanMobile = formatMobileForDtOne(mobile);
                         if (!validateMobileNumber(cleanMobile)) {
-                            return [2 /*return*/, { success: false, error: 'Invalid mobile number', code: 'INVALID_MOBILE' }];
+                            return [2 /*return*/, { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' }];
                         }
                         externalId = generateTransactionId();
-                        console.log("[DTOne] Purchasing Product ".concat(productId, " [Ref: ").concat(externalId, "]..."));
+                        console.log("[DTOne] Purchasing Product ".concat(productId, " for ").concat(cleanMobile, " [Ref: ").concat(externalId, "]..."));
                         _e.label = 1;
                     case 1:
                         _e.trys.push([1, 3, , 4]);
                         payload = {
                             external_id: externalId,
                             product_id: productId,
-                            credit_party_identifier: { mobile_number: cleanMobile },
+                            credit_party_identifier: { mobile_number: cleanMobile }, // Sending E.164
                             auto_confirm: true,
                             callback_url: callbackUrl
                         };
-                        // ✅ FIX: Only add calculation_mode if BOTH amount and unit are present.
-                        // If unit is missing, we assume it's a Fixed Product (value implied by ID) and proceed.
-                        if (amount > 0 && unit) {
+                        isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
+                        // ✅ FIX: Only add destination for Ranged products if we have amount/unit
+                        if (isRanged && amount > 0 && unit) {
                             payload.calculation_mode = 'DESTINATION_AMOUNT';
                             payload.destination = {
                                 unit_type: 'CURRENCY',
@@ -302,6 +324,7 @@ exports.dtoneService = {
                                 amount: amount
                             };
                         }
+                        console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
                         return [4 /*yield*/, dtone_1.default.postTransactionSync(payload)];
                     case 2:
                         response = _e.sent();
@@ -343,8 +366,10 @@ exports.dtoneService = {
                         if (!lookup.success)
                             return [2 /*return*/, lookup];
                         console.log("[DTOne] \u27A1\uFE0F  Operator: ".concat((_a = lookup.data) === null || _a === void 0 ? void 0 : _a.operatorName));
-                        return [4 /*yield*/, exports.dtoneService.purchaseProduct(productId, mobile, amount)];
-                    case 2: return [2 /*return*/, _b.sent()];
+                        return [4 /*yield*/, exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined)];
+                    case 2: 
+                    // Note: The 'type' argument is intentionally omitted here as it's not needed for the simple topup flow.
+                    return [2 /*return*/, _b.sent()];
                 }
             });
         });

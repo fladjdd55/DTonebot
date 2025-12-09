@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
+    "fix:sdk": "npx ts-node server/scripts/fix-sdk.ts",
+    "sdk:refresh": "npx api install ... && npm run fix:sdk",
     "dev": "vite",
     "dev:server": "ts-node -P tsconfig.server.json server/Routes.ts",
     "build": "tsc -b && vite build",

@@ -10,8 +10,8 @@ class SDK {
   core: APICore;
 
   constructor() {
-    this.spec = new (Oas as any).default(definition as any);
-    this.core = new (APICore as any).default(this.spec, 'dtone/1.22.0 (api/6.1.3)');
+    this.spec = new ((Oas as any).default || (Oas as any))(definition as any);
+    this.core = new ((APICore as any).default || (APICore as any))(this.spec, 'dtone/1.22.0 (api/6.1.3)');
   }
 
   /**

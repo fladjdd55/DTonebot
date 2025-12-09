@@ -13,8 +13,11 @@ model Transaction {
   paymentIntentId String?
   mobile          String
   productId       Int
+  productType String    // e.g., FIXED_VALUE_RECHARGE, RANGED_VALUE_RECHARGE
   amount          Float
   status          String
+  currency        String
+  paymentId   String    @unique // Stripe Payment Intent ID for refunds/tracking
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
