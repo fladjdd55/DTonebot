@@ -147,7 +147,6 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     if (callbackUrl) console.log(`[Purchase] Attaching Callback: ${callbackUrl}`);
 
     // 1. Execute Purchase
-    // ✅ FIX: Passed 'type' and 'callbackUrl' in correct order
     const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl);
 
     // 2. Handle API Errors (Network/Auth)
@@ -177,11 +176,23 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       await db.transaction.create({
         data: {
           externalId: result.data.externalId,
-          paymentIntentId: paymentId || null,
+          
+          // ✅ FIX 1: Add 'paymentId' (Required by your schema)
+          paymentId: paymentId || "N/A", 
+          
+          // Optional: Keep paymentIntentId if your schema still has it
+          paymentIntentId: paymentId || null, 
+
           mobile: mobile,
           productId: Number(productId),
           amount: Number(amount || 0),
-          currency: unit || 'UNKNOWN', // ✅ FIX: Save Currency
+          
+          // ✅ FIX 2: Add 'currency'
+          currency: unit || 'UNKNOWN',
+          
+          // ✅ FIX 3: Add 'productType' (Required by your schema)
+          productType: type || 'UNKNOWN',
+          
           status: dbStatus
         }
       });
@@ -189,6 +200,7 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       console.error("[DB] Failed to save transaction:", dbError);
     }
 
+    // 5. Return result
     return res.json({
       ...result.data,
       success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING'
@@ -201,11 +213,11 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
 
 
 // ==================================================================
-// 🔔 DTONE CALLBACK (WEBHOOK) - Now with SECURITY 🔒
+// 🔔 DTONE CALLBACK (WEBHOOK)
 // ==================================================================
 app.post('/api/callback', async (req: Request, res: Response) => {
   
-  // 1. Verify Request comes from DTOne
+  // 🔒 1. Verify Request comes from DTOne
   if (!verifyWebhook(req)) {
     console.warn(`[Callback] ⛔ Security blocked request from ${req.ip}`);
     res.status(401).json({ error: 'Unauthorized' });

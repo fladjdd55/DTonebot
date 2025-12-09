@@ -118,6 +118,25 @@ var DTONE_STATUS = {
     DECLINED: 9
 };
 // ==================================================================
+// 🔒 SECURITY HELPER (WEBHOOK)
+// ==================================================================
+var verifyWebhook = function (req) {
+    var authHeader = req.headers.authorization;
+    // If no credentials set in .env, allow all (Dev mode)
+    if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS) {
+        return true;
+    }
+    if (!authHeader)
+        return false;
+    // Basic Auth format: "Basic base64(user:pass)"
+    var _a = authHeader.split(' '), scheme = _a[0], credentials = _a[1];
+    if (scheme !== 'Basic' || !credentials)
+        return false;
+    // Decode and check
+    var _b = Buffer.from(credentials, 'base64').toString().split(':'), user = _b[0], pass = _b[1];
+    return user === process.env.DTONE_WEBHOOK_USER && pass === process.env.DTONE_WEBHOOK_PASS;
+};
+// ==================================================================
 // API ROUTES
 // ==================================================================
 app.get('/api/countries', function (_req, res) {
@@ -206,12 +225,11 @@ app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0,
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, type, paymentId, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
+    var _a, productId, mobile, amount, unit, paymentId, type, callbackUrl, result, statusId, dbStatus, dbError_1, error_4;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                console.log("📥 Incoming Purchase Request:", req.body);
-                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, type = _a.type, paymentId = _a.paymentId;
+                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId, type = _a.type;
                 if (!productId || !mobile)
                     return [2 /*return*/, res.status(400).json({ error: 'Missing fields' })];
                 _b.label = 1;
@@ -256,13 +274,17 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 return [4 /*yield*/, db_1.db.transaction.create({
                         data: {
                             externalId: result.data.externalId,
-                            paymentId: paymentId || null, // Fix: Use 'paymentId' field as per schema error
-                            productType: type, // Fix: Add 'productType' field
-                            currency: unit || 'UNKNOWN', // Fix: Add 'currency' field (which is 'unit')
+                            // ✅ FIX 1: Add 'paymentId' (Required by your schema)
+                            paymentId: paymentId || "N/A",
+                            // Optional: Keep paymentIntentId if your schema still has it
                             paymentIntentId: paymentId || null,
                             mobile: mobile,
                             productId: Number(productId),
                             amount: Number(amount || 0),
+                            // ✅ FIX 2: Add 'currency'
+                            currency: unit || 'UNKNOWN',
+                            // ✅ FIX 3: Add 'productType' (Required by your schema)
+                            productType: type || 'UNKNOWN',
                             status: dbStatus
                         }
                     })];
@@ -274,8 +296,7 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 console.error("[DB] Failed to save transaction:", dbError_1);
                 return [3 /*break*/, 12];
             case 12: 
-            // 5. Return result with explicit success flag
-            // 🛑 CRITICAL FIX: This tells the frontend it failed!
+            // 5. Return result
             return [2 /*return*/, res.json(__assign(__assign({}, result.data), { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }))];
             case 13:
                 error_4 = _b.sent();
@@ -293,6 +314,12 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
     return __generator(this, function (_g) {
         switch (_g.label) {
             case 0:
+                // 🔒 1. Verify Request comes from DTOne
+                if (!verifyWebhook(req)) {
+                    console.warn("[Callback] \u26D4 Security blocked request from ".concat(req.ip));
+                    res.status(401).json({ error: 'Unauthorized' });
+                    return [2 /*return*/];
+                }
                 txn = req.body;
                 statusId = (_c = (_b = txn.status) === null || _b === void 0 ? void 0 : _b.class) === null || _c === void 0 ? void 0 : _c.id;
                 statusMsg = ((_d = txn.status) === null || _d === void 0 ? void 0 : _d.message) || 'No details';
@@ -309,7 +336,6 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
                     res.status(200).send('OK');
                     return [2 /*return*/];
                 }
-                // Only update if status has changed (and isn't already final)
                 if (existingTx.status === 'COMPLETED' || existingTx.status === 'REFUNDED') {
                     res.status(200).send('OK');
                     return [2 /*return*/];
@@ -363,7 +389,6 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
 // ==================================================================
 // 📂 SERVE REACT FRONTEND (MUST BE LAST)
 // ==================================================================
-// ✅ FIX: Use process.cwd() to always find the 'dist' folder at project root
 var DIST_PATH = path_1.default.join(process.cwd(), 'dist');
 app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, function (_req, res) {
