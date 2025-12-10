@@ -1,4 +1,5 @@
 "use strict";
+// server/dtone.ts
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -74,20 +75,14 @@ else {
 // ==========================================
 // 2. UTILITY FUNCTIONS
 // ==========================================
-// Helper function to clean and format mobile number for DTOne (E.164)
 function formatMobileForDtOne(mobile) {
-    // Remove spaces, dashes, and parentheses
     var cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
-    // Ensure the '+' sign is present at the start
     if (!cleanMobile.startsWith('+')) {
         cleanMobile = "+".concat(cleanMobile);
     }
     return cleanMobile;
 }
-// ✅ FIX: Update Validation Logic to strictly check for E.164
 function validateMobileNumber(mobile) {
-    // Mobile is expected to be cleaned and start with '+'.
-    // DTOne requires E.164 format: ^\+[1-9][0-9]{6,14}$
     return /^\+[1-9][0-9]{6,14}$/.test(mobile);
 }
 function generateTransactionId() {
@@ -95,11 +90,9 @@ function generateTransactionId() {
     var randomStr = Math.random().toString(36).substr(2, 9);
     return "txn_".concat(timestamp, "_").concat(randomStr);
 }
-// ✅ FIX: Add deep logging to see full DTOne error details
 function handleApiError(error, context) {
     var _a, _b, _c, _d, _e, _f, _g;
     var msg = ((_d = (_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.message) || error.message || 'Unknown error';
-    // Log the full API response body if available for debugging
     if ((_e = error.response) === null || _e === void 0 ? void 0 : _e.data) {
         console.error("\u274C [DTOne ".concat(context, "] Full API Error Response:"), JSON.stringify(error.response.data, null, 2));
     }
@@ -231,11 +224,11 @@ exports.dtoneService = {
         });
     },
     // ----------------------------------------
-    // C. GET PRODUCTS (WITH PAGINATION FIX)
+    // C. GET PRODUCTS (UPDATED)
     // ----------------------------------------
     getProductsForOperator: function (operatorId_1) {
-        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, // Increase page size
-        lang) {
+        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, lang // ✅ ADDED: Default to 'en'
+        ) {
             var page, allProducts, hasMore, response, rawList, list, products, error_3, err;
             if (serviceId === void 0) { serviceId = 1; }
             if (perPage === void 0) { perPage = 100; }
@@ -243,7 +236,7 @@ exports.dtoneService = {
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        console.log("[DTOne] Fetching Products: Op=".concat(operatorId, ", Svc=").concat(serviceId));
+                        console.log("[DTOne] Fetching Products: Op=".concat(operatorId, ", Lang=").concat(lang));
                         _a.label = 1;
                     case 1:
                         _a.trys.push([1, 5, , 6]);
@@ -259,7 +252,7 @@ exports.dtoneService = {
                                 service_id: serviceId,
                                 page: page,
                                 per_page: perPage,
-                                'Accept-Language': lang
+                                'Accept-Language': lang // ✅ ADDED: Pass header to API
                             })];
                     case 3:
                         response = _a.sent();
@@ -270,13 +263,10 @@ exports.dtoneService = {
                         }
                         else {
                             allProducts = __spreadArray(__spreadArray([], allProducts, true), list, true);
-                            // If we received fewer items than requested, it's the last page
-                            if (list.length < perPage) {
+                            if (list.length < perPage)
                                 hasMore = false;
-                            }
-                            else {
+                            else
                                 page++;
-                            }
                         }
                         return [3 /*break*/, 2];
                     case 4:
@@ -317,8 +307,7 @@ exports.dtoneService = {
     // ----------------------------------------
     // D. PURCHASE
     // ----------------------------------------
-    purchaseProduct: function (productId, mobile, amount, unit, type, // Added for correct RANGED product handling
-    callbackUrl) {
+    purchaseProduct: function (productId, mobile, amount, unit, type, callbackUrl) {
         return __awaiter(this, void 0, void 0, function () {
             var cleanMobile, externalId, payload, isRanged, response, data, error_4, err;
             var _a, _b, _c, _d;
@@ -337,12 +326,11 @@ exports.dtoneService = {
                         payload = {
                             external_id: externalId,
                             product_id: productId,
-                            credit_party_identifier: { mobile_number: cleanMobile }, // Sending E.164
+                            credit_party_identifier: { mobile_number: cleanMobile },
                             auto_confirm: true,
                             callback_url: callbackUrl
                         };
                         isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
-                        // ✅ FIX: Only add destination for Ranged products if we have amount/unit
                         if (isRanged && amount > 0 && unit) {
                             payload.calculation_mode = 'DESTINATION_AMOUNT';
                             payload.destination = {
@@ -394,15 +382,13 @@ exports.dtoneService = {
                             return [2 /*return*/, lookup];
                         console.log("[DTOne] \u27A1\uFE0F  Operator: ".concat((_a = lookup.data) === null || _a === void 0 ? void 0 : _a.operatorName));
                         return [4 /*yield*/, exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined)];
-                    case 2: 
-                    // Note: The 'type' argument is intentionally omitted here as it's not needed for the simple topup flow.
-                    return [2 /*return*/, _b.sent()];
+                    case 2: return [2 /*return*/, _b.sent()];
                 }
             });
         });
     },
     // ----------------------------------------
-    // F. GET ALL OPERATORS (FOR CACHE)
+    // F. GET ALL OPERATORS
     // ----------------------------------------
     getAllOperators: function () {
         return __awaiter(this, arguments, void 0, function (serviceId) {
@@ -444,12 +430,10 @@ exports.dtoneService = {
                                 });
                             });
                             allOperators = __spreadArray(__spreadArray([], allOperators, true), simplified, true);
-                            if (list.length < 100) {
+                            if (list.length < 100)
                                 hasMore = false;
-                            }
-                            else {
+                            else
                                 page++;
-                            }
                         }
                         return [3 /*break*/, 2];
                     case 4:

@@ -1,4 +1,5 @@
 "use strict";
+// server/Routes.ts
 var __assign = (this && this.__assign) || function () {
     __assign = Object.assign || function(t) {
         for (var s, i = 1, n = arguments.length; i < n; i++) {
@@ -53,26 +54,23 @@ Object.defineProperty(exports, "__esModule", { value: true });
 var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var path_1 = __importDefault(require("path"));
-var stripe_1 = __importDefault(require("stripe")); // ✅ Import Stripe directly
+var stripe_1 = __importDefault(require("stripe"));
 var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
+var sync_products_1 = require("./scripts/sync-products"); // ✅ Import Product Sync
 var payment_1 = require("./payment");
 var db_1 = require("./db");
 var app = (0, express_1.default)();
 var PORT = process.env.PORT || 5000;
-// Initialize Stripe locally for Webhook Verification
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
     apiVersion: '2023-10-16',
 });
 app.use((0, cors_1.default)());
 // ==================================================================
-// 💳 STRIPE WEBHOOK (MUST BE BEFORE express.json)
+// 💳 STRIPE WEBHOOK
 // ==================================================================
-// This endpoint catches "Payment Succeeded" events from Stripe directly.
-// It acts as a "Fail-Safe" if the user closes their browser before the frontend finishes.
-app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json' }), // 👈 Catch raw body for signature verification
-function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json' }), function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var sig, webhookSecret, event, paymentIntent, error_1;
     return __generator(this, function (_a) {
         switch (_a.label) {
@@ -83,9 +81,8 @@ function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
                     console.error('[Stripe Webhook] ⚠️ STRIPE_WEBHOOK_SECRET is missing in .env');
                     return [2 /*return*/, res.status(500).send('Webhook secret not configured')];
                 }
-                if (!sig) {
+                if (!sig)
                     return [2 /*return*/, res.status(400).send('Missing signature')];
-                }
                 try {
                     event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
                 }
@@ -119,10 +116,9 @@ function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
         }
     });
 }); });
-// ✅ NOW we can enable JSON parsing for all other routes
 app.use(express_1.default.json());
 // ==================================================================
-// 🧠 FAIL-SAFE FULFILLMENT LOGIC
+// 🧠 FAIL-SAFE FULFILLMENT
 // ==================================================================
 var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0, void 0, void 0, function () {
     var stripeId, metadata, existingTx, result, status;
@@ -133,40 +129,31 @@ var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0,
                 stripeId = paymentIntent.id;
                 metadata = paymentIntent.metadata;
                 console.log("[Webhook] \uD83D\uDCB0 Payment ".concat(stripeId, " succeeded. Checking fulfillment..."));
-                return [4 /*yield*/, db_1.db.transaction.findFirst({
-                        where: { paymentIntentId: stripeId }
-                    })];
+                return [4 /*yield*/, db_1.db.transaction.findFirst({ where: { paymentIntentId: stripeId } })];
             case 1:
                 existingTx = _c.sent();
                 if (existingTx && (existingTx.status === 'COMPLETED' || existingTx.status === 'PENDING')) {
                     console.log("[Webhook] \u2705 Transaction ".concat(existingTx.externalId, " already recorded. Skipping."));
                     return [2 /*return*/];
                 }
-                // 2. Validate Metadata (Must have mobile/product from server/payment.ts)
                 if (!(metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || !(metadata === null || metadata === void 0 ? void 0 : metadata.productId)) {
                     console.warn("[Webhook] \u26A0\uFE0F Missing metadata for ".concat(stripeId, ". Cannot auto-fulfill."));
                     return [2 /*return*/];
                 }
-                // 3. Fulfill the Order (The "Fail-Safe")
                 console.log("[Webhook] \uD83D\uDD04 Initiating fail-safe purchase for ".concat(metadata.mobile, "..."));
-                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(Number(metadata.productId), metadata.mobile, paymentIntent.amount / 100, // Convert cents back to main unit
-                    paymentIntent.currency.toUpperCase(), metadata.type)];
+                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(Number(metadata.productId), metadata.mobile, paymentIntent.amount / 100, paymentIntent.currency.toUpperCase(), metadata.type)];
             case 2:
                 result = _c.sent();
                 status = result.success ? 'COMPLETED' : 'FAILED';
                 if (!existingTx) return [3 /*break*/, 4];
-                // If record existed but was failed/abandoned, update it
                 return [4 /*yield*/, db_1.db.transaction.update({
                         where: { id: existingTx.id },
                         data: { status: status, externalId: ((_a = result.data) === null || _a === void 0 ? void 0 : _a.externalId) || existingTx.externalId }
                     })];
             case 3:
-                // If record existed but was failed/abandoned, update it
                 _c.sent();
                 return [3 /*break*/, 6];
-            case 4: 
-            // If NO record exists (User closed browser immediately), create it
-            return [4 /*yield*/, db_1.db.transaction.create({
+            case 4: return [4 /*yield*/, db_1.db.transaction.create({
                     data: {
                         externalId: ((_b = result.data) === null || _b === void 0 ? void 0 : _b.externalId) || "retry_".concat(Date.now()),
                         paymentIntentId: stripeId,
@@ -176,11 +163,10 @@ var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0,
                         currency: paymentIntent.currency.toUpperCase(),
                         productType: metadata.type || 'UNKNOWN',
                         status: status,
-                        paymentId: stripeId // Explicitly set paymentId column
+                        paymentId: stripeId
                     }
                 })];
             case 5:
-                // If NO record exists (User closed browser immediately), create it
                 _c.sent();
                 _c.label = 6;
             case 6:
@@ -189,13 +175,11 @@ var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0,
                 return [4 /*yield*/, payment_1.paymentService.refundPayment(stripeId)];
             case 7:
                 _c.sent();
-                // Update DB to REFUNDED
                 return [4 /*yield*/, db_1.db.transaction.updateMany({
                         where: { paymentIntentId: stripeId },
                         data: { status: 'REFUNDED' }
                     })];
             case 8:
-                // Update DB to REFUNDED
                 _c.sent();
                 return [3 /*break*/, 10];
             case 9:
@@ -229,6 +213,8 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
                 operators = _a.sent();
                 if (operators)
                     OPERATOR_CACHE = operators;
+                // ✅ Optional: Run product sync on startup if empty
+                // await syncProducts(); 
                 console.log("[Server] \uD83D\uDE80 System Ready! Countries: ".concat(COUNTRY_CACHE.length, ", Operators: ").concat(OPERATOR_CACHE.length));
                 return [3 /*break*/, 5];
             case 4:
@@ -240,29 +226,22 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
     });
 }); };
 initializeCache();
+// ⏰ Schedule Daily Syncs (every 24 hours)
 setInterval(function () {
     console.log('[Server] ⏰ Running Daily Maintenance...');
     (0, sync_countries_1.syncCountries)().then(function (d) { if (d)
         COUNTRY_CACHE = d; });
     (0, sync_operators_1.syncOperators)().then(function (d) { if (d)
         OPERATOR_CACHE = d; });
+    (0, sync_products_1.syncProducts)(); // ✅ Sync Products
 }, 1000 * 60 * 60 * 24);
 // ==================================================================
-// 🔢 DTONE STATUS CODES
+// 🔒 SECURITY
 // ==================================================================
 var DTONE_STATUS = {
-    CREATED: 1,
-    CONFIRMED: 2,
-    REJECTED: 3,
-    CANCELLED: 4,
-    SUBMITTED: 5,
-    COMPLETED: 7,
-    REVERSED: 8,
-    DECLINED: 9
+    CREATED: 1, CONFIRMED: 2, REJECTED: 3, CANCELLED: 4,
+    SUBMITTED: 5, COMPLETED: 7, REVERSED: 8, DECLINED: 9
 };
-// ==================================================================
-// 🔒 SECURITY HELPER (DTOne Callback)
-// ==================================================================
 var verifyDtOneCallback = function (req) {
     var authHeader = req.headers.authorization;
     if (!process.env.DTONE_WEBHOOK_USER || !process.env.DTONE_WEBHOOK_PASS)
@@ -289,12 +268,60 @@ app.get('/api/operators', function (req, res) {
     }
     return res.json(OPERATOR_CACHE);
 });
+// ✅ UPDATED: Product Route (Read from DB First)
+app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var operatorId, localProducts, mapped, result, error_2;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                operatorId = req.body.operatorId;
+                if (!operatorId)
+                    return [2 /*return*/, res.status(400).json({ error: 'Operator ID is required' })];
+                _a.label = 1;
+            case 1:
+                _a.trys.push([1, 4, , 5]);
+                return [4 /*yield*/, db_1.db.product.findMany({
+                        where: { operatorId: Number(operatorId) }
+                    })];
+            case 2:
+                localProducts = _a.sent();
+                if (localProducts.length > 0) {
+                    mapped = localProducts.map(function (p) { return ({
+                        id: p.id,
+                        name: p.name,
+                        type: p.type,
+                        // Reconstruct "10.00 USD" string format for frontend compatibility
+                        amount: p.amount ? "".concat(p.amount.toFixed(2), " ").concat(p.currency) : 'N/A',
+                        currency: p.currency,
+                        min: p.minAmount || 0,
+                        max: p.maxAmount || 0,
+                        subserviceId: p.serviceId,
+                        benefits: []
+                    }); });
+                    return [2 /*return*/, res.json(mapped)];
+                }
+                // 2. 🐢 Fallback: Fetch from API if DB is empty
+                console.log("[Cache Miss] Fetching live products for Op ".concat(operatorId));
+                return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(operatorId, 1, 100, 'en')];
+            case 3:
+                result = _a.sent();
+                if (!result.success) {
+                    return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
+                }
+                return [2 /*return*/, res.json(result.data)];
+            case 4:
+                error_2 = _a.sent();
+                return [2 /*return*/, res.status(500).json({ error: error_2.message })];
+            case 5: return [2 /*return*/];
+        }
+    });
+}); });
 app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, amount, currency, mobile, productId, type, result, error_2;
+    var _a, amount, currency, result, error_3;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
+                _a = req.body, amount = _a.amount, currency = _a.currency;
                 if (!amount || !currency)
                     return [2 /*return*/, res.status(400).json({ error: 'Amount and currency are required' })];
                 _b.label = 1;
@@ -303,19 +330,18 @@ app.post('/api/create-payment-intent', function (req, res) { return __awaiter(vo
                 return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency)];
             case 2:
                 result = _b.sent();
-                // Note: You must update payment.ts to actually accept and save this metadata!
                 res.json(result);
                 return [3 /*break*/, 4];
             case 3:
-                error_2 = _b.sent();
-                res.status(500).json({ error: error_2.message });
+                error_3 = _b.sent();
+                res.status(500).json({ error: error_3.message });
                 return [3 /*break*/, 4];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var mobile, result, error_3;
+    var mobile, result, error_4;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -333,39 +359,14 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
                 }
                 return [2 /*return*/, res.json(result.data)];
             case 3:
-                error_3 = _a.sent();
-                return [2 /*return*/, res.status(500).json({ error: error_3.message })];
-            case 4: return [2 /*return*/];
-        }
-    });
-}); });
-app.post('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, operatorId, lang, result, error_4;
-    return __generator(this, function (_b) {
-        switch (_b.label) {
-            case 0:
-                _a = req.body, operatorId = _a.operatorId, lang = _a.lang;
-                if (!operatorId)
-                    return [2 /*return*/, res.status(400).json({ error: 'Operator ID is required' })];
-                _b.label = 1;
-            case 1:
-                _b.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(operatorId, 1, lang)];
-            case 2:
-                result = _b.sent();
-                if (!result.success) {
-                    return [2 /*return*/, res.status(400).json({ error: result.error, code: result.code })];
-                }
-                return [2 /*return*/, res.json(result.data)];
-            case 3:
-                error_4 = _b.sent();
+                error_4 = _a.sent();
                 return [2 /*return*/, res.status(500).json({ error: error_4.message })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, dbTransaction, callbackUrl, result, refund_1, statusId, dbStatus, shouldRefund, refund, dbError_1, error_5, refund, refundError_1;
+    var _a, productId, mobile, amount, unit, paymentId, type, callbackUrl, result, refund_1, statusId, dbStatus, shouldRefund, refund, dbError_1, error_5, refund, refundError_1;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -373,7 +374,6 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 if (!productId || !mobile || !paymentId) {
                     return [2 /*return*/, res.status(400).json({ error: 'Missing required fields' })];
                 }
-                dbTransaction = null;
                 _b.label = 1;
             case 1:
                 _b.trys.push([1, 12, , 17]);
@@ -431,7 +431,7 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                         }
                     })];
             case 7:
-                dbTransaction = _b.sent();
+                _b.sent();
                 return [3 /*break*/, 11];
             case 8:
                 dbError_1 = _b.sent();
@@ -470,9 +470,6 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
         }
     });
 }); });
-// ==================================================================
-// 🔔 DTONE CALLBACK (Basic Auth Security)
-// ==================================================================
 app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var txn, statusId, statusMsg, refId, existingTx, newStatus, _a, e_2;
     var _b, _c, _d, _e, _f;
@@ -550,9 +547,6 @@ app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0,
         }
     });
 }); });
-// ==================================================================
-// 📂 SERVE REACT FRONTEND (MUST BE LAST)
-// ==================================================================
 var DIST_PATH = path_1.default.join(process.cwd(), 'dist');
 app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, function (_req, res) {

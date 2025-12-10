@@ -1,10 +1,12 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = env("DATABASE_URL") // ✅ This is required in Prisma 5
+  url      = env("DATABASE_URL")
 }
 
 model Transaction {
@@ -13,11 +15,31 @@ model Transaction {
   paymentIntentId String?
   mobile          String
   productId       Int
-  productType String    // e.g., FIXED_VALUE_RECHARGE, RANGED_VALUE_RECHARGE
+  productType     String    
   amount          Float
   status          String
   currency        String
-  paymentId   String    @unique // Stripe Payment Intent ID for refunds/tracking
+  paymentId       String    @unique 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+// ✅ NEW: Product Catalog for Caching
+model Product {
+  id            Int      @id 
+  name          String
+  description   String?
+  type          String   
+  serviceId     Int
+  operatorId    Int
+  
+  // Pricing & Value
+  amount        Float?   
+  currency      String
+  minAmount     Float?   
+  maxAmount     Float?   
+  
+  updatedAt     DateTime @updatedAt
+
+  @@index([operatorId]) 
 }

@@ -1,3 +1,5 @@
+// server/dtone.ts
+
 // @ts-ignore
 import dtone from '@api/dtone';
 import dotenv from 'dotenv';
@@ -30,22 +32,15 @@ if (DTONE_MODE === 'production') {
 // 2. UTILITY FUNCTIONS
 // ==========================================
 
-// Helper function to clean and format mobile number for DTOne (E.164)
 function formatMobileForDtOne(mobile: string): string {
-    // Remove spaces, dashes, and parentheses
     let cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
-    
-    // Ensure the '+' sign is present at the start
     if (!cleanMobile.startsWith('+')) {
       cleanMobile = `+${cleanMobile}`;
     }
     return cleanMobile;
 }
 
-// ✅ FIX: Update Validation Logic to strictly check for E.164
 function validateMobileNumber(mobile: string): boolean {
-  // Mobile is expected to be cleaned and start with '+'.
-  // DTOne requires E.164 format: ^\+[1-9][0-9]{6,14}$
   return /^\+[1-9][0-9]{6,14}$/.test(mobile);
 }
 
@@ -55,11 +50,9 @@ function generateTransactionId(): string {
   return `txn_${timestamp}_${randomStr}`;
 }
 
-// ✅ FIX: Add deep logging to see full DTOne error details
 function handleApiError(error: any, context: string): { error: string, code: string } {
   const msg = error.response?.data?.errors?.[0]?.message || error.message || 'Unknown error';
   
-  // Log the full API response body if available for debugging
   if (error.response?.data) {
      console.error(`❌ [DTOne ${context}] Full API Error Response:`, JSON.stringify(error.response.data, null, 2));
   } else {
@@ -144,9 +137,7 @@ export const dtoneService = {
   // B. LOOKUP MOBILE NUMBER
   // ----------------------------------------
   async lookupMobileNumber(mobile: string): Promise<ApiResponse<LookupResult>> {
-    
-    const cleanMobile = formatMobileForDtOne(mobile); // ✅ FIX: Format for E.164
-
+    const cleanMobile = formatMobileForDtOne(mobile); 
     console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
 
     if (!validateMobileNumber(cleanMobile)) {
@@ -178,23 +169,22 @@ export const dtoneService = {
   },
 
   // ----------------------------------------
-  // C. GET PRODUCTS (WITH PAGINATION FIX)
+  // C. GET PRODUCTS (UPDATED)
   // ----------------------------------------
   async getProductsForOperator(
     operatorId: number, 
     serviceId: number = 1, 
-    perPage: number = 100, // Increase page size
-    lang: string = 'en'
+    perPage: number = 100,
+    lang: string = 'en' // ✅ ADDED: Default to 'en'
   ): Promise<ApiResponse<Product[]>> {
     
-    console.log(`[DTOne] Fetching Products: Op=${operatorId}, Svc=${serviceId}`);
+    console.log(`[DTOne] Fetching Products: Op=${operatorId}, Lang=${lang}`);
     
     try {
       let page = 1;
       let allProducts: any[] = [];
       let hasMore = true;
 
-      // 🔄 LOOP until all pages are fetched
       while (hasMore) {
         console.log(`   ... fetching page ${page}`);
         
@@ -203,7 +193,7 @@ export const dtoneService = {
           service_id: serviceId, 
           page: page,
           per_page: perPage,
-	  'Accept-Language': lang
+          'Accept-Language': lang // ✅ ADDED: Pass header to API
         });
         
         const rawList = response.data || response;
@@ -213,19 +203,13 @@ export const dtoneService = {
           hasMore = false;
         } else {
           allProducts = [...allProducts, ...list];
-          
-          // If we received fewer items than requested, it's the last page
-          if (list.length < perPage) {
-             hasMore = false;
-          } else {
-             page++;
-          }
+          if (list.length < perPage) hasMore = false;
+          else page++;
         }
       }
 
       console.log(`[DTOne] ✅ Found ${allProducts.length} total products.`);
 
-      // Map all products
       const products: Product[] = allProducts.map(p => {
         const dest = p.destination || {};
         let amount = 'N/A';
@@ -267,11 +251,11 @@ export const dtoneService = {
     mobile: string, 
     amount: number, 
     unit?: string, 
-    type?: string, // Added for correct RANGED product handling
+    type?: string, 
     callbackUrl?: string
   ): Promise<ApiResponse<TransactionResult>> {
     
-    const cleanMobile = formatMobileForDtOne(mobile); // ✅ FIX: Format for E.164
+    const cleanMobile = formatMobileForDtOne(mobile);
 
     if (!validateMobileNumber(cleanMobile)) {
       return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
@@ -284,15 +268,13 @@ export const dtoneService = {
       const payload: any = {
         external_id: externalId,
         product_id: productId,
-        credit_party_identifier: { mobile_number: cleanMobile }, // Sending E.164
+        credit_party_identifier: { mobile_number: cleanMobile }, 
         auto_confirm: true,
 	      callback_url: callbackUrl
       };
 
-      // Check if this is a Ranged product
       const isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
       
-      // ✅ FIX: Only add destination for Ranged products if we have amount/unit
       if (isRanged && amount > 0 && unit) {
         payload.calculation_mode = 'DESTINATION_AMOUNT';
         payload.destination = {
@@ -303,7 +285,6 @@ export const dtoneService = {
       }
       
       console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
-
 
       const response = await dtone.postTransactionSync(payload);
       const data = (response.data || response) as any;
@@ -330,21 +311,17 @@ export const dtoneService = {
   // ----------------------------------------
   async purchaseTopup(mobile: string, productId: number, amount: number = 0): Promise<ApiResponse<TransactionResult | LookupResult>> {
     console.log(`[DTOne] 🔄 Auto-Topup started for ${mobile}`);
-    
     const lookup = await dtoneService.lookupMobileNumber(mobile);
     if (!lookup.success) return lookup; 
-
     console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
-    // Note: The 'type' argument is intentionally omitted here as it's not needed for the simple topup flow.
     return await dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined); 
   },
 
   // ----------------------------------------
-  // F. GET ALL OPERATORS (FOR CACHE)
+  // F. GET ALL OPERATORS
   // ----------------------------------------
   async getAllOperators(serviceId: number = 1): Promise<ApiResponse<any[]>> {
     console.log(`[DTOne] 🔄 Fetching ALL Operators (Service ${serviceId})...`);
-    
     try {
       let page = 1;
       let allOperators: any[] = [];
@@ -363,7 +340,6 @@ export const dtoneService = {
         if (list.length === 0) {
           hasMore = false;
         } else {
-          // Map to relevant fields to keep cache lightweight
           const simplified = list.map(op => ({
             id: op.id,
             name: op.name,
@@ -372,12 +348,8 @@ export const dtoneService = {
           }));
 
           allOperators = [...allOperators, ...simplified];
-          
-          if (list.length < 100) {
-             hasMore = false;
-          } else {
-             page++;
-          }
+          if (list.length < 100) hasMore = false;
+          else page++;
         }
       }
 
