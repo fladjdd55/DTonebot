@@ -41,17 +41,24 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.syncProducts = syncProducts;
-// 1. Force load .env immediately (Critical for scripts)
+console.log("🚀 Script started! If you see this, the file is running.");
 var dotenv_1 = __importDefault(require("dotenv"));
 var path_1 = __importDefault(require("path"));
-dotenv_1.default.config({ path: path_1.default.join(__dirname, '../../.env') });
+var p_limit_1 = __importDefault(require("p-limit")); // Make sure this is installed: npm install p-limit
+// Force load .env from the root directory
+var envPath = path_1.default.resolve(__dirname, '../../.env');
+console.log("\uD83D\uDCC2 Loading .env from: ".concat(envPath));
+dotenv_1.default.config({ path: envPath });
 var db_1 = require("../db");
 var dtone_1 = require("../dtone");
+// ⚡ CONFIGURATION
+var CONCURRENCY = 10; // Number of operators to fetch in parallel
 function syncProducts() {
     return __awaiter(this, void 0, void 0, function () {
-        var key, operators, opList, productCount, operatorCount, _i, opList_1, op, apiRes, _a, _b, p, fixedAmount, error_1;
-        return __generator(this, function (_c) {
-            switch (_c.label) {
+        var key, currentCount, operatorsRes, opList_1, limit_1, processedOps_1, productsSaved_1, tasks, error_1;
+        var _this = this;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
                 case 0:
                     console.log('\n==================================================');
                     console.log('📦 [Sync] Starting Product Catalog Refresh');
@@ -59,97 +66,115 @@ function syncProducts() {
                     key = process.env.DTONE_API_KEY;
                     if (!key) {
                         console.error('❌ FATAL: DTONE_API_KEY is missing in process.env');
-                        console.error('   Make sure you have a .env file in the root directory.');
                         return [2 /*return*/];
                     }
                     console.log("\uD83D\uDD11 API Key loaded: ".concat(key.substring(0, 4), "..."));
-                    _c.label = 1;
+                    _a.label = 1;
                 case 1:
-                    _c.trys.push([1, 10, , 11]);
-                    // 2. Get all operators
+                    _a.trys.push([1, 5, 6, 7]);
+                    // 2. Connect to DB
+                    console.log('🗄️  Connecting to Database...');
+                    return [4 /*yield*/, db_1.db.product.count()];
+                case 2:
+                    currentCount = _a.sent();
+                    console.log("   (Current products in DB: ".concat(currentCount, ")"));
+                    // 3. Fetch Operators
                     console.log('📡 Connecting to DTOne to fetch operators...');
                     return [4 /*yield*/, dtone_1.dtoneService.getAllOperators()];
-                case 2:
-                    operators = _c.sent();
-                    if (!operators.success || !operators.data) {
-                        console.error('❌ Failed to get operators. API Response:', operators.error);
+                case 3:
+                    operatorsRes = _a.sent();
+                    if (!operatorsRes.success || !operatorsRes.data) {
+                        console.error('❌ Failed to get operators. API Response:', operatorsRes.error);
                         return [2 /*return*/];
                     }
-                    opList = operators.data;
-                    console.log("\u2705 Found ".concat(opList.length, " operators."));
-                    if (opList.length === 0) {
+                    opList_1 = operatorsRes.data;
+                    console.log("\u2705 Found ".concat(opList_1.length, " operators."));
+                    if (opList_1.length === 0) {
                         console.warn('⚠️ No operators found. Check your API credentials or Service ID.');
                         return [2 /*return*/];
                     }
-                    productCount = 0;
-                    operatorCount = 0;
-                    // 3. Loop through operators
-                    console.log('🔄 Fetching products for each operator (this may take a moment)...');
-                    _i = 0, opList_1 = opList;
-                    _c.label = 3;
-                case 3:
-                    if (!(_i < opList_1.length)) return [3 /*break*/, 9];
-                    op = opList_1[_i];
-                    operatorCount++;
-                    // Progress bar effect
-                    process.stdout.write("\r   Processing Op ".concat(operatorCount, "/").concat(opList.length, " (ID: ").concat(op.id, ")..."));
-                    return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(op.id, 1, 100, 'en')];
+                    // 4. Parallel Processing Setup
+                    console.log("\uD83D\uDD04 Fetching products for ".concat(opList_1.length, " operators (Concurrency: ").concat(CONCURRENCY, ")..."));
+                    limit_1 = (0, p_limit_1.default)(CONCURRENCY);
+                    processedOps_1 = 0;
+                    productsSaved_1 = 0;
+                    tasks = opList_1.map(function (op) {
+                        return limit_1(function () { return __awaiter(_this, void 0, void 0, function () {
+                            var apiRes, upsertPromises, err_1;
+                            return __generator(this, function (_a) {
+                                switch (_a.label) {
+                                    case 0:
+                                        _a.trys.push([0, 4, 5, 6]);
+                                        return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(op.id, 1, 100, 'en')];
+                                    case 1:
+                                        apiRes = _a.sent();
+                                        if (!(apiRes.success && apiRes.data && apiRes.data.length > 0)) return [3 /*break*/, 3];
+                                        upsertPromises = apiRes.data.map(function (p) {
+                                            var fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                                            return db_1.db.product.upsert({
+                                                where: { id: p.id },
+                                                update: {
+                                                    name: p.name,
+                                                    amount: fixedAmount,
+                                                    minAmount: p.min,
+                                                    maxAmount: p.max,
+                                                    updatedAt: new Date()
+                                                },
+                                                create: {
+                                                    id: p.id,
+                                                    name: p.name,
+                                                    type: p.type,
+                                                    serviceId: p.subserviceId || 1, // Default to 1 if missing
+                                                    operatorId: op.id,
+                                                    currency: p.currency,
+                                                    amount: fixedAmount,
+                                                    minAmount: p.min,
+                                                    maxAmount: p.max
+                                                }
+                                            });
+                                        });
+                                        // Wait for DB writes for this operator
+                                        return [4 /*yield*/, Promise.all(upsertPromises)];
+                                    case 2:
+                                        // Wait for DB writes for this operator
+                                        _a.sent();
+                                        productsSaved_1 += apiRes.data.length;
+                                        _a.label = 3;
+                                    case 3: return [3 /*break*/, 6];
+                                    case 4:
+                                        err_1 = _a.sent();
+                                        console.error("\u274C Error fetching Op ".concat(op.id, ":"), err_1);
+                                        return [3 /*break*/, 6];
+                                    case 5:
+                                        processedOps_1++;
+                                        if (processedOps_1 % 10 === 0 || processedOps_1 === opList_1.length) {
+                                            console.log("   \uD83D\uDCDD Progress: ".concat(processedOps_1, "/").concat(opList_1.length, " operators checked."));
+                                        }
+                                        return [7 /*endfinally*/];
+                                    case 6: return [2 /*return*/];
+                                }
+                            });
+                        }); });
+                    });
+                    // 5. Execute all tasks
+                    return [4 /*yield*/, Promise.all(tasks)];
                 case 4:
-                    apiRes = _c.sent();
-                    if (!(apiRes.success && apiRes.data && apiRes.data.length > 0)) return [3 /*break*/, 8];
-                    _a = 0, _b = apiRes.data;
-                    _c.label = 5;
-                case 5:
-                    if (!(_a < _b.length)) return [3 /*break*/, 8];
-                    p = _b[_a];
-                    fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
-                    return [4 /*yield*/, db_1.db.product.upsert({
-                            where: { id: p.id },
-                            update: {
-                                name: p.name,
-                                amount: fixedAmount,
-                                minAmount: p.min,
-                                maxAmount: p.max,
-                                updatedAt: new Date()
-                            },
-                            create: {
-                                id: p.id,
-                                name: p.name,
-                                type: p.type,
-                                serviceId: p.subserviceId || 1,
-                                operatorId: op.id,
-                                currency: p.currency,
-                                amount: fixedAmount,
-                                minAmount: p.min,
-                                maxAmount: p.max
-                            }
-                        })];
-                case 6:
-                    _c.sent();
-                    productCount++;
-                    _c.label = 7;
-                case 7:
-                    _a++;
-                    return [3 /*break*/, 5];
-                case 8:
-                    _i++;
-                    return [3 /*break*/, 3];
-                case 9:
+                    // 5. Execute all tasks
+                    _a.sent();
                     console.log("\n\n\u2705 [Success] Sync Complete!");
-                    console.log("   - Operators Processed: ".concat(operatorCount));
-                    console.log("   - Products Saved in DB: ".concat(productCount));
+                    console.log("   - Operators Processed: ".concat(processedOps_1));
+                    console.log("   - Products Saved in DB: ".concat(productsSaved_1));
                     console.log('==================================================\n');
-                    return [3 /*break*/, 11];
-                case 10:
-                    error_1 = _c.sent();
-                    console.error('\n❌ [Sync] Script Crashed:', error_1.message);
-                    return [3 /*break*/, 11];
-                case 11: return [2 /*return*/];
+                    return [3 /*break*/, 7];
+                case 5:
+                    error_1 = _a.sent();
+                    console.error('\n❌ [Sync] Script Crashed:', error_1);
+                    return [3 /*break*/, 7];
+                case 6: return [7 /*endfinally*/];
+                case 7: return [2 /*return*/];
             }
         });
     });
 }
-// Allow running directly: npx ts-node server/scripts/sync-products.ts
-if (require.main === module) {
-    syncProducts();
-}
+// 🔥 EXECUTE IMMEDIATELY
+syncProducts();

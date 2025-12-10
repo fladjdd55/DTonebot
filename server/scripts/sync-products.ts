@@ -1,9 +1,16 @@
 // server/scripts/sync-products.ts
 
+// ✅ FIX: Force IPv4 to prevent network hangs
+import dns from 'node:dns';
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
+
 console.log("🚀 Script started! If you see this, the file is running.");
 
 import dotenv from 'dotenv';
 import path from 'path';
+import pLimit from 'p-limit'; 
 
 // Force load .env from the root directory
 const envPath = path.resolve(__dirname, '../../.env');
@@ -13,9 +20,17 @@ dotenv.config({ path: envPath });
 import { db } from '../db';
 import { dtoneService } from '../dtone';
 
+// ⚡ CONFIGURATION (SAFE MODE)
+const CONCURRENCY = 1;      // Process 1 operator at a time to respect limits
+const RATE_LIMIT_DELAY = 1000; // Wait 1 second between operators
+const RETRY_DELAY = 10000;   // Wait 10 seconds if we hit a 429 Error
+
+// Helper: Sleep function
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
+
 export async function syncProducts() {
   console.log('\n==================================================');
-  console.log('📦 [Sync] Starting Product Catalog Refresh');
+  console.log('📦 [Sync] Starting Product Catalog Refresh (Safe Mode)');
   console.log('==================================================');
 
   // 1. Check API Key
@@ -29,78 +44,127 @@ export async function syncProducts() {
   try {
     // 2. Connect to DB
     console.log('🗄️  Connecting to Database...');
-    const operatorCountDB = await db.product.count(); 
-    console.log(`   (Current products in DB: ${operatorCountDB})`);
+    const currentCount = await db.product.count(); 
+    console.log(`   (Current products in DB: ${currentCount})`);
 
     // 3. Fetch Operators
     console.log('📡 Connecting to DTOne to fetch operators...');
-    const operators = await dtoneService.getAllOperators(); 
     
-    if (!operators.success || !operators.data) {
-      console.error('❌ Failed to get operators. API Response:', operators.error);
-      return;
+    // Simple retry for the main operator list
+    let opList: any[] = [];
+    let attempts = 0;
+    while (attempts < 3 && opList.length === 0) {
+        attempts++;
+        const res = await dtoneService.getAllOperators();
+        if (res.success && res.data) {
+            opList = res.data;
+        } else {
+            console.warn(`⚠️  Failed to fetch operators (Attempt ${attempts}). Retrying in 3s...`);
+            await sleep(3000);
+        }
     }
-
-    const opList = operators.data;
-    console.log(`✅ Found ${opList.length} operators.`);
 
     if (opList.length === 0) {
-      console.warn('⚠️ No operators found. Check your API credentials or Service ID.');
+      console.error('❌ Failed to get operators. Aborting.');
       return;
     }
 
-    let productCount = 0;
-    let operatorCount = 0;
+    console.log(`✅ Found ${opList.length} operators.`);
 
-    // 4. Loop through operators
-    console.log('🔄 Fetching products for each operator...');
+    // 4. Process Operators (Sequential Safe Mode)
+    console.log(`🔄 Fetching products for ${opList.length} operators...`);
     
-    for (const op of opList) {
-      operatorCount++;
-      // Show progress every 5 operators to avoid spamming logs if it's fast
-      if (operatorCount % 5 === 0) process.stdout.write(`\r   Processing Op ${operatorCount}/${opList.length}...`);
+    const limit = pLimit(CONCURRENCY);
+    let processedOps = 0;
+    let productsSaved = 0;
 
-      const apiRes = await dtoneService.getProductsForOperator(op.id, 1, 100, 'en');
-      
-      if (apiRes.success && apiRes.data && apiRes.data.length > 0) {
-        for (const p of apiRes.data) {
-          const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+    const tasks = opList.map((op) => {
+      return limit(async () => {
+        let opSuccess = false;
+        let opRetries = 0;
 
-          await db.product.upsert({
-            where: { id: p.id },
-            update: {
-              name: p.name,
-              amount: fixedAmount,
-              minAmount: p.min,
-              maxAmount: p.max,
-              updatedAt: new Date()
-            },
-            create: {
-              id: p.id,
-              name: p.name,
-              type: p.type,
-              serviceId: p.subserviceId || 1,
-              operatorId: op.id,
-              currency: p.currency,
-              amount: fixedAmount,
-              minAmount: p.min,
-              maxAmount: p.max
+        while (!opSuccess && opRetries < 3) {
+            try {
+                // Fetch products
+                const apiRes = await dtoneService.getProductsForOperator(op.id, 1, 100, 'en');
+                
+                // CASE 1: Rate Limit Hit
+                if (!apiRes.success && (apiRes.error?.includes('Too Many Requests') || apiRes.code === '429')) {
+                    opRetries++;
+                    console.warn(`⏳ Rate Limit Hit on Op ${op.id}. Pausing ${RETRY_DELAY/1000}s...`);
+                    await sleep(RETRY_DELAY);
+                    continue; // Retry loop
+                }
+
+                // CASE 2: Other Error
+                if (!apiRes.success) {
+                    // console.error(`❌ Error Op ${op.id}: ${apiRes.error}`); // Optional: Un-comment to see all errors
+                    opSuccess = true; // Treat as "done" so we don't retry forever on 404s
+                    break;
+                }
+
+                // CASE 3: Success
+                if (apiRes.data && apiRes.data.length > 0) {
+                    const upsertPromises = apiRes.data.map((p) => {
+                    const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                    return db.product.upsert({
+                        where: { id: p.id },
+                        update: {
+                            name: p.name,
+                            amount: fixedAmount,
+                            minAmount: p.min,
+                            maxAmount: p.max,
+			    serviceId: p.subserviceId || 1,
+                            updatedAt: new Date()
+                        },
+                        create: {
+                            id: p.id,
+                            name: p.name,
+                            type: p.type,
+                            serviceId: p.subserviceId || 1, 
+                            operatorId: op.id,
+                            currency: p.currency,
+                            amount: fixedAmount,
+                            minAmount: p.min,
+                            maxAmount: p.max
+                        }
+                    });
+                    });
+
+                    await Promise.all(upsertPromises);
+                    productsSaved += apiRes.data.length;
+                }
+                
+                opSuccess = true; // Mark done
+
+            } catch (err) {
+                console.error(`❌ Crash on Op ${op.id}:`, err);
+                opSuccess = true; // Move on
             }
-          });
-          productCount++;
         }
-      }
-    }
+
+        // ✅ RATE LIMITING: Always wait a bit between operators
+        await sleep(RATE_LIMIT_DELAY);
+
+        processedOps++;
+        if (processedOps % 5 === 0 || processedOps === opList.length) {
+            console.log(`   📝 Progress: ${processedOps}/${opList.length} operators checked. (Saved: ${productsSaved})`);
+        }
+      });
+    });
+
+    await Promise.all(tasks);
 
     console.log(`\n\n✅ [Success] Sync Complete!`);
-    console.log(`   - Operators Processed: ${operatorCount}`);
-    console.log(`   - Products Saved in DB: ${productCount}`);
+    console.log(`   - Operators Processed: ${processedOps}`);
+    console.log(`   - Products Saved in DB: ${productsSaved}`);
     console.log('==================================================\n');
 
   } catch (error: any) {
     console.error('\n❌ [Sync] Script Crashed:', error);
+  } finally {
+    // await db.$disconnect();
   }
 }
 
-// 🔥 EXECUTE IMMEDIATELY (No checks)
 syncProducts();

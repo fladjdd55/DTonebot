@@ -19,6 +19,7 @@ if (!DTONE_API_KEY || !DTONE_API_SECRET) {
 }
 
 dtone.auth(DTONE_API_KEY, DTONE_API_SECRET);
+dtone.config({ timeout: 20000 });
 
 if (DTONE_MODE === 'production') {
   console.log('[DTOne] 🚀 Mode: PRODUCTION');
