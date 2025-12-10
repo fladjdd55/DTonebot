@@ -12,7 +12,7 @@ import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 
 // ✅ $5 Minimum Limit for USD products
-const MIN_USD_AMOUNT = 5;
+const MIN_USD_AMOUNT = 1;
 
 // Helper to filter out small USD products
 const isProductEligible = (p: Product) => {
