@@ -28,12 +28,19 @@ export const rechargeApi = {
     return data;
   },
 
-  async getProducts(operatorId: number, lang?: string) {
-    const res = await fetch(`${API_URL}/products`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ operatorId, lang: lang || 'en' })
+  // ✅ UPDATED: Uses GET and Query Strings
+  async getProducts(operatorId: number, currency?: string, ranged?: boolean) {
+    const params = new URLSearchParams();
+    params.append('operatorId', operatorId.toString());
+    
+    if (currency) params.append('currency', currency);
+    if (ranged) params.append('ranged', 'true');
+
+    const res = await fetch(`${API_URL}/products?${params.toString()}`, {
+      method: 'GET', // ✅ Must match Backend
+      headers: { 'Content-Type': 'application/json' }
     });
+    
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to load products');
     return data;

@@ -5,22 +5,18 @@ import type { CountryCode } from 'libphonenumber-js';
 
 import { useCountries } from '../hooks/useCountries'; 
 import { useOperators } from '../hooks/useOperators';
+import { useProducts } from '../hooks/useProducts'; 
 import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValidationResult } from '../../../shared/phoneValidator'; 
 import { filterCountries, type Country } from '../shared/countryValidator'; 
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
-// ✅ Import the language helper
-import { getLanguageForCountry } from '../shared/countryLanguages';
 
-// ✅ CONFIG: Read from .env or default to 5
-const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_USD_ORDER) || 5;
+// ✅ $5 Minimum Limit for USD products
+const MIN_USD_AMOUNT = 5;
 
-// Helper to filter out small USD products from the UI
+// Helper to filter out small USD products
 const isProductEligible = (p: Product) => {
-  // If not USD, we assume it's valid
-  if (p.currency !== 'USD') return true;
-
-  // Parse "5.00 USD" -> 5.00
+  if (p.currency !== 'USD') return true; // Allow small amounts for other currencies (NGN, INR, etc.)
   const price = parseFloat(p.amount.split(' ')[0]);
   return price >= MIN_USD_AMOUNT;
 };
@@ -37,41 +33,106 @@ export default function RechargeFlow() {
   const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
   const [operator, setOperator] = useState<any>(null);
-  const [products, setProducts] = useState<Product[]>([]);
   const [txnResult, setTxnResult] = useState<any>(null);
   
   const [logoError, setLogoError] = useState(false);
   const [activeTab, setActiveTab] = useState<'AIRTIME' | 'DATA' | 'BUNDLES'>('AIRTIME');
-  const [customAmount, setCustomAmount] = useState('');
   
   const [showManualSelection, setShowManualSelection] = useState(false);
-
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
-  
-  // ✅ IDEMPOTENCY: Prevent double submissions
   const [isPurchasing, setIsPurchasing] = useState(false);
+
+  // ✅ FILTERS
+  const [currency, setCurrency] = useState(''); 
+  const [priceFilter, setPriceFilter] = useState<number | 'ALL'>('ALL'); // Quick Price Filter
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
   
-  const { operators: availableOperators, usingFallback: operatorsOffline } = useOperators(selectedCountry?.iso3);
+  // ✅ FIX: Removed unused 'operatorsOffline'
+  const { operators: availableOperators, usingFallback: operatorsFallback } = useOperators(selectedCountry?.iso3);
+
+  // 1. Fetch All Products
+  const { products: allProducts, loading: productsLoading } = useProducts(
+    operator?.operatorId, 
+    '', 
+    undefined // No ranged filter needed, we filter client-side
+  );
+
+  // 2. Dynamic Currencies
+  const availableCurrencies = useMemo(() => {
+    if (!allProducts.length) return [];
+    const currencies = new Set(allProducts.map(p => p.currency));
+    return Array.from(currencies).sort(); 
+  }, [allProducts]);
+
+  // 🚀 SMART AUTO-SELECT CURRENCY
+  useEffect(() => {
+    if (availableCurrencies.length > 0) {
+      if (!currency || !availableCurrencies.includes(currency)) {
+        if (availableCurrencies.includes('USD')) {
+          setCurrency('USD');
+        } else {
+          setCurrency(''); // Default to 'All'
+        }
+      }
+    }
+  }, [availableCurrencies, currency]);
+
+  // 3. ✅ FILTER LOGIC
+  const filteredProducts = useMemo(() => {
+    let list = allProducts;
+
+    // A. Show ONLY Fixed Products (Hide Custom/Ranged)
+    list = list.filter(p => !p.type.includes('RANGED'));
+
+    // B. Currency Filter
+    if (currency) {
+      list = list.filter(p => p.currency === currency);
+    }
+
+    // C. Global Min Price Check ($5 USD Rule)
+    list = list.filter(isProductEligible);
+
+    // D. Quick Amount Filter
+    if (priceFilter !== 'ALL') {
+      list = list.filter(p => {
+        const price = parseFloat(p.amount.split(' ')[0]);
+        return Math.abs(price - priceFilter) <= 1.5; 
+      });
+    }
+
+    return list;
+  }, [allProducts, currency, priceFilter]);
+
+  // 4. Categorize for Tabs
+  const categorizedProducts = useMemo(() => {
+    return {
+      AIRTIME: filteredProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
+      DATA: filteredProducts.filter(p => p.subserviceId === 12),
+      BUNDLES: filteredProducts.filter(p => p.subserviceId === 13),
+    };
+  }, [filteredProducts]);
+
+  // Dynamic Tabs
+  const visibleTabs = useMemo(() => {
+    const tabs: ('AIRTIME' | 'DATA' | 'BUNDLES')[] = [];
+    if (categorizedProducts.AIRTIME.length > 0) tabs.push('AIRTIME');
+    if (categorizedProducts.DATA.length > 0) tabs.push('DATA');
+    if (categorizedProducts.BUNDLES.length > 0) tabs.push('BUNDLES');
+    return tabs;
+  }, [categorizedProducts]);
+
+  useEffect(() => {
+    if (visibleTabs.length > 0 && !visibleTabs.includes(activeTab)) {
+      setActiveTab(visibleTabs[0]);
+    }
+  }, [visibleTabs, activeTab]);
 
   const filteredCountries = useMemo(() => {
     return filterCountries(countries || [], searchQuery || '');
   }, [searchQuery, countries]);
-
-  const categorizedProducts = useMemo(() => {
-    return {
-      AIRTIME: products.filter(p => p.subserviceId === 11 || !p.subserviceId),
-      DATA: products.filter(p => p.subserviceId === 12),
-      BUNDLES: products.filter(p => p.subserviceId === 13),
-    };
-  }, [products]);
-
-  const rangedProduct = useMemo(() => {
-    return categorizedProducts.AIRTIME.find(p => p.type === 'RANGED_VALUE_RECHARGE' || p.type === 'RANGED_VALUE_PIN');
-  }, [categorizedProducts.AIRTIME]);
 
   const operatorCountryName = useMemo(() => {
     if (!operator || !countries.length) return operator?.countryIso || 'Unknown';
@@ -156,72 +217,31 @@ export default function RechargeFlow() {
     setApiError('');
   };
 
-  // ✅ UPDATED: Pass language to API
   const handleConfirmOperator = async () => {
-    if (!operator) return;
-    setLoading(true);
-    setApiError('');
-
-    // 1. Get the correct language based on the selected country
-    const lang = selectedCountry ? getLanguageForCountry(selectedCountry.code) : 'en';
-
-    try {
-      // 2. Pass the language to the API
-      const prodData = await rechargeApi.getProducts(operator.operatorId, lang);
-      setProducts(prodData);
-      setStep(2);
-    } catch (err: any) {
-      setApiError('Could not load products. Server may be offline.');
-    } finally {
-      setLoading(false);
-    }
+    setStep(2);
   };
 
-  const handlePurchase = async (product: Product, amount?: number) => {
-    // ✅ IDEMPOTENCY check
+  const handlePurchase = async (product: Product) => {
     if (isPurchasing) return;
     setIsPurchasing(true);
 
-    let finalAmount = amount || 0;
-    
-    // 1. Determine Amount (Fixed vs Ranged)
-    if (product.type !== 'RANGED_VALUE_RECHARGE' && product.type !== 'RANGED_VALUE_PIN') {
-      const priceString = product.amount.split(' ')[0]; 
-      finalAmount = parseFloat(priceString);
-    } 
+    const priceString = product.amount.split(' ')[0]; 
+    const finalAmount = parseFloat(priceString);
 
-    // 2. ✅ CALCULATE EFFECTIVE MINIMUM (The Smart Logic)
-    const effectiveMin = product.currency === 'USD' 
-      ? Math.max(product.min, MIN_USD_AMOUNT) 
-      : product.min;
-
-    // 3. ✅ UNIFIED CHECK
-    if (product.type === 'RANGED_VALUE_RECHARGE' || product.type === 'RANGED_VALUE_PIN') {
-       if (!finalAmount || finalAmount < effectiveMin || finalAmount > product.max) {
-        setApiError(`Amount must be between ${effectiveMin} and ${product.max} ${product.currency}`);
+    const effectiveMin = product.currency === 'USD' ? Math.max(product.min, MIN_USD_AMOUNT) : product.min;
+    if (finalAmount < effectiveMin) {
+        setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
         setIsPurchasing(false);
         return;
-      }
-    } else {
-        // For Fixed products, we just check the minimum
-        if (finalAmount < effectiveMin) {
-            setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
-            setIsPurchasing(false);
-            return;
-        }
     }
 
-    // 4. Proceed to Modal
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
-    
     setIsPurchasing(false); 
   };
 
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
-    
-    // 🛑 DO NOT CLOSE MODAL YET. Wait for backend response.
     setLoading(true); 
     setApiError('');
 
@@ -235,23 +255,19 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
-      // ✅ FIX: Check for explicit success flags from our new robust backend
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
           : `Transaction failed: ${result.message || result.error || 'Unknown error'}`;
-        
         throw new Error(errorMsg);
       }
 
-      // Success!
       setTxnResult(result);
-      setIsPayModalOpen(false); // ✅ Safe to close now
+      setIsPayModalOpen(false);
       setStep(3); 
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      // ✅ THROW error so PaymentModal catches it and stops spinning
       throw err;
     } finally {
       setLoading(false);
@@ -264,9 +280,8 @@ export default function RechargeFlow() {
     setValidationState(null);
     setApiError('');
     setOperator(null);
-    setProducts([]);
-    setCustomAmount('');
     setShowManualSelection(false);
+    setPriceFilter('ALL'); 
   };
 
   if (countriesLoading) return <div className="text-center p-10"><Loader2 className="w-8 h-8 mx-auto animate-spin text-indigo-600" /><p className="mt-4 text-gray-600">Loading countries list...</p></div>;
@@ -277,7 +292,8 @@ export default function RechargeFlow() {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
         <div className="bg-indigo-600 p-6 text-white relative">
-          {(usingFallback || operatorsOffline) && (
+          {/* ✅ Replaced operatorsOffline with operatorsFallback logic */}
+          {(usingFallback || operatorsFallback) && (
             <div className="absolute top-4 right-4 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
               <Wifi className="w-3 h-3" /> OFFLINE
             </div>
@@ -298,6 +314,7 @@ export default function RechargeFlow() {
             </div>
           )}
 
+          {/* STEP 1: COUNTRY & PHONE */}
           {step === 1 && (
             <div className="space-y-6">
               <div className="relative" ref={dropdownRef}>
@@ -403,6 +420,7 @@ export default function RechargeFlow() {
             </div>
           )}
 
+          {/* STEP 1.5: CONFIRM OPERATOR */}
           {step === 1.5 && operator && (
             <div className="space-y-6 text-center">
               <div className="bg-indigo-50 p-6 rounded-xl border-2 border-indigo-100">
@@ -428,16 +446,16 @@ export default function RechargeFlow() {
               <div className="space-y-3">
                 <button
                   onClick={handleConfirmOperator}
-                  disabled={loading}
                   className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 flex justify-center items-center gap-2"
                 >
-                  {loading ? <Loader2 className="animate-spin" /> : <>Confirm & View Plans <ArrowRight className="w-4 h-4" /></>}
+                  Confirm & View Plans <ArrowRight className="w-4 h-4" />
                 </button>
                 <button onClick={() => setStep(1)} className="w-full text-gray-500 py-2 hover:text-gray-700 text-sm font-medium">Incorrect Operator? Go Back</button>
               </div>
             </div>
           )}
 
+          {/* STEP 2: SELECT PRODUCT */}
           {step === 2 && operator && (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b pb-4">
@@ -457,91 +475,91 @@ export default function RechargeFlow() {
                 <button onClick={resetFlow} className="text-sm text-blue-600 underline">Change</button>
               </div>
 
-              <div className="flex bg-gray-100 p-1 rounded-lg">
-                {(['AIRTIME', 'DATA', 'BUNDLES'] as const).map(tab => (
-                  <button
-                    key={tab}
-                    onClick={() => setActiveTab(tab)}
-                    className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
-                      activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-                    }`}
+              {/* 🟢 NEW: QUICK PRICE FILTERS */}
+              <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+                <button 
+                  onClick={() => setPriceFilter('ALL')} 
+                  className={`px-3 py-1 text-xs rounded-full border whitespace-nowrap transition-colors ${priceFilter === 'ALL' ? 'bg-black text-white border-black' : 'bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200'}`}
+                >
+                  All
+                </button>
+                {[5, 10, 15, 20, 25, 50].map(amt => (
+                  <button 
+                    key={amt}
+                    onClick={() => setPriceFilter(amt)}
+                    className={`px-3 py-1 text-xs rounded-full border whitespace-nowrap transition-colors ${priceFilter === amt ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'}`}
                   >
-                    {tab === 'AIRTIME' && <Smartphone className="w-4 h-4 inline mr-1 mb-0.5" />}
-                    {tab === 'DATA' && <Globe className="w-4 h-4 inline mr-1 mb-0.5" />}
-                    {tab === 'BUNDLES' && <Package className="w-4 h-4 inline mr-1 mb-0.5" />}
-                    {tab.charAt(0) + tab.slice(1).toLowerCase()}
+                    ${amt}
                   </button>
                 ))}
               </div>
 
+              {/* CURRENCY DROPDOWN */}
+              <div className="flex gap-2 mb-2">
+                <select 
+                  value={currency} 
+                  onChange={(e) => setCurrency(e.target.value)} 
+                  className="border p-2 rounded-lg text-sm flex-1 bg-white"
+                  disabled={availableCurrencies.length <= 1} 
+                >
+                  <option value="">All Currencies</option>
+                  {availableCurrencies.map(c => (
+                    <option key={c} value={c}>{c}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* CATEGORY TABS (Hidden if empty) */}
+              {visibleTabs.length > 0 && (
+                <div className="flex bg-gray-100 p-1 rounded-lg">
+                  {visibleTabs.map(tab => (
+                    <button
+                      key={tab}
+                      onClick={() => setActiveTab(tab)}
+                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
+                        activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {tab === 'AIRTIME' && <Smartphone className="w-4 h-4 inline mr-1 mb-0.5" />}
+                      {tab === 'DATA' && <Globe className="w-4 h-4 inline mr-1 mb-0.5" />}
+                      {tab === 'BUNDLES' && <Package className="w-4 h-4 inline mr-1 mb-0.5" />}
+                      {tab.charAt(0) + tab.slice(1).toLowerCase()}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               <div className="min-h-[250px]">
+                {productsLoading ? (
+                    <div className="flex justify-center items-center h-40 text-gray-500 gap-2">
+                        <Loader2 className="animate-spin w-5 h-5"/> Loading products...
+                    </div>
+                ) : (
+                <>
                 {activeTab === 'AIRTIME' && (
-                  <div className="space-y-4">
-                    {rangedProduct && (
-                      <div className="bg-indigo-50 p-4 rounded-xl border border-indigo-100">
-                        <label className="block text-xs font-bold text-indigo-700 uppercase mb-2">Custom Amount</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="number"
-                            value={customAmount}
-                            onChange={(e) => setCustomAmount(e.target.value)}
-                            
-                            // ✅ DISPLAY THE EFFECTIVE MINIMUM (Smart Placeholder)
-                            placeholder={`${
-                              rangedProduct.currency === 'USD' 
-                                ? Math.max(rangedProduct.min, MIN_USD_AMOUNT) 
-                                : rangedProduct.min
-                            } - ${rangedProduct.max}`}
-                            
-                            className="flex-1 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none"
-                          />
-                          <button 
-                            onClick={() => handlePurchase(rangedProduct, parseFloat(customAmount))}
-                            disabled={!customAmount}
-                            className="bg-indigo-600 text-white px-4 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50"
-                          >
-                            Pay
-                          </button>
-                        </div>
-                        <p className="text-xs text-indigo-400 mt-1">
-                          Range: {rangedProduct.currency === 'USD' 
-                                ? Math.max(rangedProduct.min, MIN_USD_AMOUNT) 
-                                : rangedProduct.min} 
-                          - {rangedProduct.max} {rangedProduct.currency}
-                        </p>
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
+                      {categorizedProducts.AIRTIME.map(p => (
+                        <button 
+                          key={p.id} 
+                          onClick={() => handlePurchase(p)} 
+                          className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
+                        >
+                          <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
+                            {p.amount.split(' ')[0]}
+                          </span>
+                          <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
+                            {p.currency}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {categorizedProducts.AIRTIME.length === 0 && (
+                      <div className="text-center py-10 text-gray-400">
+                        {priceFilter !== 'ALL' ? `No fixed plans found for ~$${priceFilter}.` : 'No airtime plans available.'}
                       </div>
                     )}
-
-                    <div className="space-y-2">
-                      {categorizedProducts.AIRTIME.filter(p => p.type !== 'RANGED_VALUE_RECHARGE' && p.type !== 'RANGED_VALUE_PIN').length > 0 && 
-                        <p className="text-xs text-gray-400 font-bold uppercase mt-2">Fixed Amounts</p>
-                      }
-                      
-                      <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                        {categorizedProducts.AIRTIME
-                          .filter(p => p.type !== 'RANGED_VALUE_RECHARGE' && p.type !== 'RANGED_VALUE_PIN')
-                          // ✅ FILTER: Hide cheap fixed products if they are USD
-                          .filter(isProductEligible)
-                          .map(p => (
-                          <button 
-                            key={p.id} 
-                            onClick={() => handlePurchase(p)} 
-                            className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
-                          >
-                            <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
-                              {p.amount.split(' ')[0]}
-                            </span>
-                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
-                              {p.currency}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-
-                      {!rangedProduct && categorizedProducts.AIRTIME.length === 0 && (
-                        <div className="text-center py-10 text-gray-400">No airtime plans found.</div>
-                      )}
-                    </div>
                   </div>
                 )}
 
@@ -550,7 +568,7 @@ export default function RechargeFlow() {
                     {categorizedProducts[activeTab].length === 0 ? (
                       <div className="text-center py-10 text-gray-400">
                         <Package className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                        No {activeTab.toLowerCase()} plans found.
+                        No plans found.
                       </div>
                     ) : (
                       categorizedProducts[activeTab].map(p => (
@@ -568,6 +586,8 @@ export default function RechargeFlow() {
                       ))
                     )}
                   </div>
+                )}
+                </>
                 )}
               </div>
             </div>
@@ -599,7 +619,7 @@ export default function RechargeFlow() {
                onClose={() => setIsPayModalOpen(false)}
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
-               onSuccess={executeTransaction} // ✅ Pass the handler
+               onSuccess={executeTransaction} 
                mobile={pendingTxn.mobile}
                productId={pendingTxn.product.id}
                productType={pendingTxn.product.type}

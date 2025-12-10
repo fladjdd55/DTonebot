@@ -64,6 +64,7 @@ if (!DTONE_API_KEY || !DTONE_API_SECRET) {
     throw new Error('FATAL: Missing DTOne credentials in .env file');
 }
 dtone_1.default.auth(DTONE_API_KEY, DTONE_API_SECRET);
+dtone_1.default.config({ timeout: 20000 });
 if (DTONE_MODE === 'production') {
     console.log('[DTOne] 🚀 Mode: PRODUCTION');
     dtone_1.default.server('https://dvs-api.dtone.com/v1');
