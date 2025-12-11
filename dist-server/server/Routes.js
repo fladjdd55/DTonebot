@@ -55,6 +55,7 @@ var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var path_1 = __importDefault(require("path"));
 var stripe_1 = __importDefault(require("stripe"));
+var node_cron_1 = __importDefault(require("node-cron"));
 var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
@@ -166,45 +167,82 @@ var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0,
     });
 }); };
 // ==================================================================
-// 🚀 CACHE & SYNC
+// 🚀 CACHE & SCHEDULER
 // ==================================================================
 var COUNTRY_CACHE = [];
 var OPERATOR_CACHE = [];
+// 1. Initial Load (On Server Start)
 var initializeCache = function () { return __awaiter(void 0, void 0, void 0, function () {
     var c, o, e_1;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
-                _a.trys.push([0, 3, , 4]);
-                return [4 /*yield*/, (0, sync_countries_1.syncCountries)()];
+                console.log('[Server] ⏳ Initializing Caches...');
+                _a.label = 1;
             case 1:
+                _a.trys.push([1, 4, , 5]);
+                return [4 /*yield*/, (0, sync_countries_1.syncCountries)()];
+            case 2:
                 c = _a.sent();
                 if (c)
                     COUNTRY_CACHE = c;
                 return [4 /*yield*/, (0, sync_operators_1.syncOperators)()];
-            case 2:
+            case 3:
                 o = _a.sent();
                 if (o)
                     OPERATOR_CACHE = o;
-                (0, sync_products_1.syncProducts)();
+                // ✅ CONTROLLED SYNC: Only run if .env says so
+                if (process.env.SYNC_ON_STARTUP === 'true') {
+                    console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
+                    (0, sync_products_1.syncProducts)(); // Run in background (don't await)
+                }
+                else {
+                    console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
+                }
                 console.log("[Server] \uD83D\uDE80 System Ready!");
-                return [3 /*break*/, 4];
-            case 3:
+                return [3 /*break*/, 5];
+            case 4:
                 e_1 = _a.sent();
                 console.error("Cache init failed", e_1);
-                return [3 /*break*/, 4];
-            case 4: return [2 /*return*/];
+                return [3 /*break*/, 5];
+            case 5: return [2 /*return*/];
         }
     });
 }); };
 initializeCache();
-setInterval(function () {
-    (0, sync_countries_1.syncCountries)().then(function (d) { if (d)
-        COUNTRY_CACHE = d; });
-    (0, sync_operators_1.syncOperators)().then(function (d) { if (d)
-        OPERATOR_CACHE = d; });
-    (0, sync_products_1.syncProducts)();
-}, 1000 * 60 * 60 * 24);
+// 2. Cron Schedule (Runs daily at 03:00 AM)
+node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0, void 0, void 0, function () {
+    var c, o, err_1;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                console.log('[Scheduler] 🌙 3 AM Sync Starting...');
+                _a.label = 1;
+            case 1:
+                _a.trys.push([1, 5, , 6]);
+                return [4 /*yield*/, (0, sync_countries_1.syncCountries)()];
+            case 2:
+                c = _a.sent();
+                if (c)
+                    COUNTRY_CACHE = c;
+                return [4 /*yield*/, (0, sync_operators_1.syncOperators)()];
+            case 3:
+                o = _a.sent();
+                if (o)
+                    OPERATOR_CACHE = o;
+                return [4 /*yield*/, (0, sync_products_1.syncProducts)()];
+            case 4:
+                _a.sent();
+                console.log('[Scheduler] ✅ Daily sync complete.');
+                return [3 /*break*/, 6];
+            case 5:
+                err_1 = _a.sent();
+                console.error('[Scheduler] ❌ Daily sync failed:', err_1);
+                return [3 /*break*/, 6];
+            case 6: return [2 /*return*/];
+        }
+    });
+}); });
 // ==================================================================
 // API ROUTES
 // ==================================================================
@@ -273,7 +311,6 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
         }
     });
 }); });
-// ✅ UPDATED: Pass metadata to Stripe
 app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var _a, amount, currency, mobile, productId, type, result, error_3;
     return __generator(this, function (_b) {
@@ -327,7 +364,7 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
     });
 }); });
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, callbackUrl, result, refund, statusId, dbStatus, error_5;
+    var _a, productId, mobile, amount, unit, paymentId, type, existing, callbackUrl, result, refund, statusId, dbStatus, error_5;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -336,30 +373,39 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     return [2 /*return*/, res.status(400).json({ error: 'Missing required fields' })];
                 _b.label = 1;
             case 1:
-                _b.trys.push([1, 9, , 11]);
+                _b.trys.push([1, 10, , 12]);
+                return [4 /*yield*/, db_1.db.transaction.findFirst({
+                        where: { paymentIntentId: paymentId }
+                    })];
+            case 2:
+                existing = _b.sent();
+                if (existing) {
+                    console.log("[API] Payment ".concat(paymentId, " already processed by webhook."));
+                    return [2 /*return*/, res.json(__assign(__assign({ success: existing.status === 'COMPLETED' || existing.status === 'PENDING' }, existing), { dbStatus: existing.status }))];
+                }
                 callbackUrl = process.env.DTONE_CALLBACK_URL ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/callback") : undefined;
                 return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl)];
-            case 2:
-                result = _b.sent();
-                if (!(!result.success || !result.data)) return [3 /*break*/, 4];
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
             case 3:
+                result = _b.sent();
+                if (!(!result.success || !result.data)) return [3 /*break*/, 5];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 4:
                 refund = _b.sent();
                 return [2 /*return*/, res.status(400).json({ success: false, error: result.error, code: result.code, refunded: !!refund })];
-            case 4:
+            case 5:
                 statusId = result.data.statusId;
                 dbStatus = 'PENDING';
-                if (!(statusId === 7)) return [3 /*break*/, 5];
+                if (!(statusId === 7)) return [3 /*break*/, 6];
                 dbStatus = 'COMPLETED';
-                return [3 /*break*/, 7];
-            case 5:
-                if (![3, 9].includes(statusId || 0)) return [3 /*break*/, 7];
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+                return [3 /*break*/, 8];
             case 6:
+                if (![3, 9].includes(statusId || 0)) return [3 /*break*/, 8];
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+            case 7:
                 _b.sent();
                 dbStatus = 'FAILED';
-                _b.label = 7;
-            case 7: return [4 /*yield*/, db_1.db.transaction.create({
+                _b.label = 8;
+            case 8: return [4 /*yield*/, db_1.db.transaction.create({
                     data: {
                         externalId: result.data.externalId, paymentIntentId: paymentId, paymentId: paymentId,
                         mobile: mobile,
@@ -367,16 +413,16 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                         currency: unit || 'UNKNOWN', productType: type || 'UNKNOWN', status: dbStatus
                     }
                 })];
-            case 8:
+            case 9:
                 _b.sent();
                 return [2 /*return*/, res.json(__assign(__assign({ success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }, result.data), { dbStatus: dbStatus }))];
-            case 9:
+            case 10:
                 error_5 = _b.sent();
                 return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
-            case 10:
+            case 11:
                 _b.sent();
                 return [2 /*return*/, res.status(500).json({ success: false, error: 'Internal server error', refunded: true })];
-            case 11: return [2 /*return*/];
+            case 12: return [2 /*return*/];
         }
     });
 }); });

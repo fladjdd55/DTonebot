@@ -23,6 +23,11 @@ export class ErrorBoundary extends Component<Props, State> {
     console.error('ErrorBoundary caught an error:', error, errorInfo);
   }
 
+  // ✅ Add reset method for soft recovery
+  private handleReset = () => {
+    this.setState({ hasError: false, error: undefined });
+  };
+
   public render() {
     if (this.state.hasError) {
       return (
@@ -33,11 +38,21 @@ export class ErrorBoundary extends Component<Props, State> {
               <h2 className="text-xl font-bold text-gray-900">Something went wrong</h2>
             </div>
             <p className="text-gray-600 mb-4">
-              We're sorry, but something unexpected happened. Please refresh the page and try again.
+              We're sorry, but something unexpected happened. You can try again or reload the page.
             </p>
+            
+            {/* Primary Action: Soft Reset */}
+            <button
+              onClick={this.handleReset}
+              className="w-full bg-indigo-600 text-white py-2 rounded-lg font-semibold hover:bg-indigo-700 mb-3"
+            >
+              Try Again
+            </button>
+
+            {/* Secondary Action: Hard Reload */}
             <button
               onClick={() => window.location.reload()}
-              className="w-full bg-indigo-600 text-white py-2 rounded-lg font-semibold hover:bg-indigo-700"
+              className="w-full bg-gray-100 text-gray-700 py-2 rounded-lg font-semibold hover:bg-gray-200"
             >
               Reload Page
             </button>

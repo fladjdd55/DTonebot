@@ -21,6 +21,7 @@ interface PaymentModalProps {
   mobile: string;
   productId: number;
   productType: string;
+  transactionError?: string; // ✅ Added prop for external errors
 }
 
 function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> }) {
@@ -101,7 +102,8 @@ export default function PaymentModal({
   currency, 
   mobile, 
   productId, 
-  productType 
+  productType,
+  transactionError // ✅ Destructure new prop
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -119,7 +121,6 @@ export default function PaymentModal({
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ✅ CRITICAL FIX: Ensure metadata is passed for webhooks
         body: JSON.stringify({ 
           amount, 
           currency, 
@@ -170,6 +171,14 @@ export default function PaymentModal({
               {amount || 0} <span className="text-lg text-gray-500">{currency}</span>
             </span>
           </div>
+
+          {/* ✅ DISPLAY PARENT TRANSACTION ERRORS HERE */}
+          {transactionError && (
+            <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2 mb-4 border border-red-100">
+              <AlertCircle className="w-4 h-4 shrink-0" /> 
+              <span>{transactionError}</span>
+            </div>
+          )}
 
           {clientSecret ? (
             <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>

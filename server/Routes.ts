@@ -4,6 +4,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path'; 
 import Stripe from 'stripe'; 
+import cron from 'node-cron'; 
 import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 
@@ -91,26 +92,43 @@ const handleFailSafePurchase = async (paymentIntent: Stripe.PaymentIntent) => {
 };
 
 // ==================================================================
-// 🚀 CACHE & SYNC
+// 🚀 CACHE & SCHEDULER
 // ==================================================================
 let COUNTRY_CACHE: any[] = [];
 let OPERATOR_CACHE: any[] = []; 
 
+// 1. Initial Load (On Server Start)
 const initializeCache = async () => {
+  console.log('[Server] ⏳ Initializing Caches...');
   try {
     const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
     const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
-    syncProducts(); 
+    
+    // ✅ CONTROLLED SYNC: Only run if .env says so
+    if (process.env.SYNC_ON_STARTUP === 'true') {
+      console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
+      syncProducts(); // Run in background (don't await)
+    } else {
+      console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
+    }
+    
     console.log(`[Server] 🚀 System Ready!`);
   } catch (e) { console.error("Cache init failed", e); }
 };
 initializeCache();
 
-setInterval(() => {
-  syncCountries().then(d => { if(d) COUNTRY_CACHE = d; });
-  syncOperators().then(d => { if(d) OPERATOR_CACHE = d; });
-  syncProducts();
-}, 1000 * 60 * 60 * 24);
+// 2. Cron Schedule (Runs daily at 03:00 AM)
+cron.schedule('0 3 * * *', async () => {
+  console.log('[Scheduler] 🌙 3 AM Sync Starting...');
+  try {
+    const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
+    const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
+    await syncProducts();
+    console.log('[Scheduler] ✅ Daily sync complete.');
+  } catch (err) {
+    console.error('[Scheduler] ❌ Daily sync failed:', err);
+  }
+});
 
 // ==================================================================
 // API ROUTES
@@ -179,7 +197,6 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ✅ UPDATED: Pass metadata to Stripe
 app.post('/api/create-payment-intent', async (req: Request, res: Response): Promise<any> => {
   const { amount, currency, mobile, productId, type } = req.body; 
   
@@ -214,6 +231,20 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   if (!productId || !mobile || !paymentId) return res.status(400).json({ error: 'Missing required fields' });
 
   try {
+    // Check if webhook processed it
+    const existing = await db.transaction.findFirst({ 
+      where: { paymentIntentId: paymentId } 
+    });
+    
+    if (existing) {
+      console.log(`[API] Payment ${paymentId} already processed by webhook.`);
+      return res.json({ 
+        success: existing.status === 'COMPLETED' || existing.status === 'PENDING', 
+        ...existing,
+        dbStatus: existing.status 
+      });
+    }
+
     const callbackUrl = process.env.DTONE_CALLBACK_URL ? `${process.env.DTONE_CALLBACK_URL}/api/callback` : undefined;
     const result = await dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl);
 

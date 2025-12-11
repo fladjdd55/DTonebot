@@ -230,14 +230,14 @@ export default function RechargeFlow() {
         return;
     }
 
+    // Reset API error before opening modal
+    setApiError('');
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
-    
-    // Kept to prevent double-clicks on the main UI while modal opens
     setIsPurchasing(false); 
   };
 
-  // ✅ UPDATED: Robust Error Handling
+  // ✅ UPDATED: Robust Error Handling & Modal Connection
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     setLoading(true); 
@@ -253,7 +253,6 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
-      // Explicitly check for failure states to throw error
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
@@ -267,10 +266,10 @@ export default function RechargeFlow() {
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      // ✅ FIX: Show error to user and close modal so they can retry or see the message
+      // ✅ Set the error state, which is passed to the modal
       setApiError(err.message || 'Transaction failed');
-      setIsPayModalOpen(false); 
-      // throw err; // Optional: re-throw if PaymentModal needs to know, but we handled UI here.
+      // ❌ Keep modal OPEN so user sees the error
+      throw err; 
     } finally {
       setLoading(false);
     }
@@ -624,6 +623,7 @@ export default function RechargeFlow() {
                mobile={pendingTxn.mobile}
                productId={pendingTxn.product.id}
                productType={pendingTxn.product.type}
+               transactionError={apiError} // ✅ Pass error to modal
              />
           )}
 

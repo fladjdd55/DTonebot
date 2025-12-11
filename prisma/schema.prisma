@@ -21,7 +21,7 @@ model Transaction {
   currency        String
   
   // ✅ FIX: Removed @unique to allow retries/duplicates if necessary
-  paymentId       String     
+  paymentId       String?     
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
