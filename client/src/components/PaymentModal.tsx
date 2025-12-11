@@ -21,7 +21,7 @@ interface PaymentModalProps {
   mobile: string;
   productId: number;
   productType: string;
-  transactionError?: string; // ✅ Added prop for external errors
+  transactionError?: string; // ✅ FIX: Added this property
 }
 
 function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> }) {
@@ -58,7 +58,9 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        // Run transaction. If it throws, we catch it below.
         await onSuccess(paymentIntent.id);
+        setIsProcessing(false); 
       } else if (paymentIntent && paymentIntent.status === 'requires_action') {
         setMessage("Authentication required. Please complete the security check.");
         setIsProcessing(false);
@@ -68,6 +70,7 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
       }
     } catch (err: any) {
       console.error("Payment Error:", err);
+      // This message will appear right above the "Pay Now" button
       setMessage(err.message || 'An unexpected error occurred. Please try again.');
       setIsProcessing(false);
     }
@@ -77,9 +80,11 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
     <form onSubmit={handleSubmit} className="space-y-6">
       <PaymentElement />
       
+      {/* Internal Payment Error Display */}
       {message && (
-        <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2">
-          <AlertCircle className="w-4 h-4" /> {message}
+        <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2 border border-red-100">
+          <AlertCircle className="w-4 h-4 shrink-0" /> 
+          <span>{message}</span>
         </div>
       )}
 
@@ -103,7 +108,7 @@ export default function PaymentModal({
   mobile, 
   productId, 
   productType,
-  transactionError // ✅ Destructure new prop
+  transactionError // ✅ FIX: Destructure this prop
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -172,7 +177,7 @@ export default function PaymentModal({
             </span>
           </div>
 
-          {/* ✅ DISPLAY PARENT TRANSACTION ERRORS HERE */}
+          {/* ✅ TRANSACTION ERROR DISPLAY (From Parent) */}
           {transactionError && (
             <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2 mb-4 border border-red-100">
               <AlertCircle className="w-4 h-4 shrink-0" /> 

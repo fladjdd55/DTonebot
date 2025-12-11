@@ -4,7 +4,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path'; 
 import Stripe from 'stripe'; 
-import cron from 'node-cron'; 
+import cron from 'node-cron';
 import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 

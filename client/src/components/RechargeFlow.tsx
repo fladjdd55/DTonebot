@@ -230,18 +230,16 @@ export default function RechargeFlow() {
         return;
     }
 
-    // Reset API error before opening modal
-    setApiError('');
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
+    setApiError(''); // Clear errors
     setIsPayModalOpen(true);
     setIsPurchasing(false); 
   };
 
-  // ✅ UPDATED: Robust Error Handling & Modal Connection
+  // ✅ UPDATED: Clean Logic - No throwing
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     setLoading(true); 
-    setApiError('');
 
     try {
       const result = await rechargeApi.purchase(
@@ -257,7 +255,11 @@ export default function RechargeFlow() {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
           : `Transaction failed: ${result.message || result.error || 'Unknown error'}`;
-        throw new Error(errorMsg);
+        
+        // ✅ Set Error, Stop Loading, Return (Keeps modal open)
+        setApiError(errorMsg);
+        setLoading(false);
+        return;
       }
 
       setTxnResult(result);
@@ -266,11 +268,8 @@ export default function RechargeFlow() {
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      // ✅ Set the error state, which is passed to the modal
+      // ✅ Set Error, Stop Loading (Keeps modal open)
       setApiError(err.message || 'Transaction failed');
-      // ❌ Keep modal OPEN so user sees the error
-      throw err; 
-    } finally {
       setLoading(false);
     }
   };
@@ -307,7 +306,7 @@ export default function RechargeFlow() {
         </div>
 
         <div className="p-6">
-          {apiError && (
+          {apiError && !isPayModalOpen && (
             <div className="mb-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg flex items-center gap-2 border border-red-100">
               <AlertCircle className="w-4 h-4" />
               {apiError}
