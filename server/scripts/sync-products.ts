@@ -167,4 +167,6 @@ export async function syncProducts() {
   }
 }
 
-syncProducts();
+if (require.main === module) {
+  syncProducts();
+}
