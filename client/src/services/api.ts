@@ -16,9 +16,42 @@ export interface Product {
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const API_URL = `${BASE_URL}/api`;
 
+// ✅ FIX: Define a reasonable timeout (e.g., 60s)
+// This is longer than the Backend's 20s DTOne timeout to allow for overhead,
+// but ensures the UI doesn't hang indefinitely.
+const REQUEST_TIMEOUT_MS = 60000;
+
+/**
+ * Helper to wrap fetch with a timeout
+ */
+async function fetchWithTimeout(resource: string, options: RequestInit = {}) {
+  const { signal, ...rest } = options;
+  
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  
+  // Allow passing an external signal if needed, otherwise use our controller
+  const requestSignal = signal || controller.signal;
+
+  try {
+    const response = await fetch(resource, {
+      ...rest,
+      signal: requestSignal
+    });
+    clearTimeout(id);
+    return response;
+  } catch (error: any) {
+    clearTimeout(id);
+    if (error.name === 'AbortError') {
+      throw new Error('Network timeout. The server took too long to respond.');
+    }
+    throw error;
+  }
+}
+
 export const rechargeApi = {
   async lookup(mobile: string) {
-    const res = await fetch(`${API_URL}/lookup`, {
+    const res = await fetchWithTimeout(`${API_URL}/lookup`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ mobile })
@@ -36,7 +69,7 @@ export const rechargeApi = {
     if (currency) params.append('currency', currency);
     if (ranged) params.append('ranged', 'true');
 
-    const res = await fetch(`${API_URL}/products?${params.toString()}`, {
+    const res = await fetchWithTimeout(`${API_URL}/products?${params.toString()}`, {
       method: 'GET', // ✅ Must match Backend
       headers: { 'Content-Type': 'application/json' }
     });
@@ -47,7 +80,7 @@ export const rechargeApi = {
   },
 
   async purchase(productId: number, mobile: string, amount: number, unit: string, type: string,  paymentId?: string) {
-    const res = await fetch(`${API_URL}/purchase`, {
+    const res = await fetchWithTimeout(`${API_URL}/purchase`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ productId, mobile, amount, unit, type,  paymentId })

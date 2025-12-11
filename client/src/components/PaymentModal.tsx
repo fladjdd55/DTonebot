@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react'; // ✅ Import useMemo
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
@@ -21,8 +21,8 @@ interface PaymentModalProps {
   mobile: string;
   productId: number;
   productType: string;
-  transactionError?: string; // ✅ Added
-  isProcessingTransaction?: boolean; // ✅ Added
+  transactionError?: string;
+  isProcessingTransaction?: boolean;
 }
 
 function CheckoutForm({ 
@@ -30,14 +30,13 @@ function CheckoutForm({
   isProcessingTransaction 
 }: { 
   onSuccess: (id: string) => Promise<void>;
-  isProcessingTransaction?: boolean; // ✅ Added
+  isProcessingTransaction?: boolean;
 }) {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
-  // ✅ Combined loading state
   const isLoading = isProcessing || isProcessingTransaction;
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -49,6 +48,7 @@ function CheckoutForm({
     setMessage(null);
 
     try {
+      // 1. Submit the form elements first
       const { error: submitError } = await elements.submit();
       if (submitError) {
         setMessage(submitError.message || "Please check your card details.");
@@ -56,6 +56,7 @@ function CheckoutForm({
         return;
       }
 
+      // 2. Confirm the payment
       const { error, paymentIntent } = await stripe.confirmPayment({
         elements,
         confirmParams: {
@@ -68,7 +69,6 @@ function CheckoutForm({
         setMessage(error.message || 'Payment failed');
         setIsProcessing(false);
       } else if (paymentIntent && paymentIntent.status === 'succeeded') {
-        // Run transaction. If it throws, we catch it below.
         await onSuccess(paymentIntent.id);
         setIsProcessing(false); 
       } else if (paymentIntent && paymentIntent.status === 'requires_action') {
@@ -80,7 +80,6 @@ function CheckoutForm({
       }
     } catch (err: any) {
       console.error("Payment Error:", err);
-      // This message will appear right above the "Pay Now" button
       setMessage(err.message || 'An unexpected error occurred. Please try again.');
       setIsProcessing(false);
     }
@@ -90,7 +89,6 @@ function CheckoutForm({
     <form onSubmit={handleSubmit} className="space-y-6">
       <PaymentElement />
       
-      {/* Internal Payment Error Display */}
       {message && (
         <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2 border border-red-100">
           <AlertCircle className="w-4 h-4 shrink-0" /> 
@@ -99,11 +97,11 @@ function CheckoutForm({
       )}
 
       <button
-        disabled={isLoading || !stripe || !elements} // ✅ Use combined loading
-        id="submit"
+        disabled={isLoading || !stripe || !elements}
+        type="submit" // ✅ Explicit type
         className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
       >
-        {isLoading ? ( // ✅ Show different states
+        {isLoading ? (
           <>
             <Loader2 className="animate-spin w-4 h-4" /> 
             {isProcessingTransaction ? 'Processing Transaction...' : 'Processing Payment...'}
@@ -125,8 +123,8 @@ export default function PaymentModal({
   mobile, 
   productId, 
   productType,
-  transactionError, // ✅ Destructure
-  isProcessingTransaction // ✅ Destructure
+  transactionError,
+  isProcessingTransaction
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -173,6 +171,12 @@ export default function PaymentModal({
     }
   }, [isOpen, amount, currency, mobile, productId, productType]); 
 
+  // ✅ FIX: Memoize options to prevent re-initialization of Elements
+  const elementsOptions = useMemo(() => ({
+    clientSecret,
+    appearance: { theme: 'stripe' as const },
+  }), [clientSecret]);
+
   if (!isOpen) return null;
 
   return (
@@ -185,7 +189,7 @@ export default function PaymentModal({
           </div>
           <button 
             onClick={onClose} 
-            disabled={isProcessingTransaction} // ✅ Prevent close during processing
+            disabled={isProcessingTransaction}
             className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <X className="w-5 h-5" />
@@ -199,7 +203,6 @@ export default function PaymentModal({
             </span>
           </div>
 
-          {/* ✅ TRANSACTION ERROR DISPLAY */}
           {transactionError && (
             <div className="p-4 bg-red-50 text-red-600 text-sm rounded-lg flex items-start gap-3 mb-4 border-2 border-red-200">
               <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" /> 
@@ -211,10 +214,11 @@ export default function PaymentModal({
           )}
 
           {clientSecret ? (
-            <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
+            // ✅ FIX: Use memoized options
+            <Elements key={clientSecret} options={elementsOptions} stripe={stripePromise}>
               <CheckoutForm 
                 onSuccess={onSuccess} 
-                isProcessingTransaction={isProcessingTransaction} // ✅ Pass state
+                isProcessingTransaction={isProcessingTransaction}
               />
             </Elements>
           ) : initError ? (

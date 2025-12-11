@@ -66,11 +66,11 @@ var app = (0, express_1.default)();
 var PORT = process.env.PORT || 5000;
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
 app.use((0, cors_1.default)());
-app.use(express_1.default.json());
 // ==================================================================
-// 💳 STRIPE WEBHOOK
+// 1. STRIPE WEBHOOK (Must be BEFORE express.json)
 // ==================================================================
-app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json' }), function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+// ✅ FIX: Use express.raw() to verify Stripe signatures correctly
+app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }), function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var sig, webhookSecret, event, paymentIntent, error_1;
     return __generator(this, function (_a) {
         switch (_a.label) {
@@ -85,6 +85,7 @@ app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json'
                     event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
                 }
                 catch (err) {
+                    console.error("Webhook Signature Error: ".concat(err.message));
                     return [2 /*return*/, res.status(400).send("Webhook Error: ".concat(err.message))];
                 }
                 _a.label = 1;
@@ -92,8 +93,18 @@ app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json'
                 _a.trys.push([1, 4, , 5]);
                 if (!(event.type === 'payment_intent.succeeded')) return [3 /*break*/, 3];
                 paymentIntent = event.data.object;
-                return [4 /*yield*/, handleFailSafePurchase(paymentIntent)];
+                console.log("[Webhook] Payment Succeeded: ".concat(paymentIntent.id));
+                // ✅ Uses unified race-proof logic
+                return [4 /*yield*/, processPurchase({
+                        paymentId: paymentIntent.id,
+                        mobile: paymentIntent.metadata.mobile,
+                        productId: Number(paymentIntent.metadata.productId),
+                        amount: paymentIntent.amount / 100,
+                        currency: paymentIntent.currency.toUpperCase(),
+                        type: paymentIntent.metadata.type || 'UNKNOWN'
+                    })];
             case 2:
+                // ✅ Uses unified race-proof logic
                 _a.sent();
                 _a.label = 3;
             case 3:
@@ -101,73 +112,17 @@ app.post('/api/stripe-webhook', express_1.default.raw({ type: 'application/json'
                 return [3 /*break*/, 5];
             case 4:
                 error_1 = _a.sent();
+                console.error('Webhook handler failed:', error_1);
                 res.status(500).send('Webhook handler failed');
                 return [3 /*break*/, 5];
             case 5: return [2 /*return*/];
         }
     });
 }); });
+// ✅ GLOBAL PARSER: Now we can use JSON for everything else
+app.use(express_1.default.json());
 // ==================================================================
-// 🧠 FAIL-SAFE LOGIC
-// ==================================================================
-var handleFailSafePurchase = function (paymentIntent) { return __awaiter(void 0, void 0, void 0, function () {
-    var stripeId, metadata, existingTx, result, status;
-    var _a, _b;
-    return __generator(this, function (_c) {
-        switch (_c.label) {
-            case 0:
-                stripeId = paymentIntent.id;
-                metadata = paymentIntent.metadata;
-                return [4 /*yield*/, db_1.db.transaction.findFirst({ where: { paymentIntentId: stripeId } })];
-            case 1:
-                existingTx = _c.sent();
-                if (existingTx && (existingTx.status === 'COMPLETED' || existingTx.status === 'PENDING'))
-                    return [2 /*return*/];
-                if (!(metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || !(metadata === null || metadata === void 0 ? void 0 : metadata.productId))
-                    return [2 /*return*/];
-                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(Number(metadata.productId), metadata.mobile, paymentIntent.amount / 100, paymentIntent.currency.toUpperCase(), metadata.type)];
-            case 2:
-                result = _c.sent();
-                status = result.success ? 'COMPLETED' : 'FAILED';
-                if (!existingTx) return [3 /*break*/, 4];
-                return [4 /*yield*/, db_1.db.transaction.update({
-                        where: { id: existingTx.id },
-                        data: { status: status, externalId: ((_a = result.data) === null || _a === void 0 ? void 0 : _a.externalId) || existingTx.externalId }
-                    })];
-            case 3:
-                _c.sent();
-                return [3 /*break*/, 6];
-            case 4: return [4 /*yield*/, db_1.db.transaction.create({
-                    data: {
-                        externalId: ((_b = result.data) === null || _b === void 0 ? void 0 : _b.externalId) || "retry_".concat(Date.now()),
-                        paymentIntentId: stripeId,
-                        mobile: metadata.mobile,
-                        productId: Number(metadata.productId),
-                        amount: paymentIntent.amount / 100,
-                        currency: paymentIntent.currency.toUpperCase(),
-                        productType: metadata.type || 'UNKNOWN',
-                        status: status,
-                        paymentId: stripeId
-                    }
-                })];
-            case 5:
-                _c.sent();
-                _c.label = 6;
-            case 6:
-                if (!!result.success) return [3 /*break*/, 9];
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(stripeId)];
-            case 7:
-                _c.sent();
-                return [4 /*yield*/, db_1.db.transaction.updateMany({ where: { paymentIntentId: stripeId }, data: { status: 'REFUNDED' } })];
-            case 8:
-                _c.sent();
-                _c.label = 9;
-            case 9: return [2 /*return*/];
-        }
-    });
-}); };
-// ==================================================================
-// 🚀 CACHE & SCHEDULER
+// 🚀 CACHE & SCHEDULER (Full Logic)
 // ==================================================================
 var COUNTRY_CACHE = [];
 var OPERATOR_CACHE = [];
@@ -209,6 +164,7 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
         }
     });
 }); };
+// Run immediately on start
 initializeCache();
 // 2. Cron Schedule (Runs daily at 03:00 AM)
 node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0, void 0, void 0, function () {
@@ -243,6 +199,100 @@ node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0,
         }
     });
 }); });
+// ==================================================================
+// 🧩 UNIFIED PURCHASE LOGIC (Race-Condition Proof)
+// ==================================================================
+function processPurchase(data) {
+    return __awaiter(this, void 0, void 0, function () {
+        var paymentId, mobile, productId, amount, currency, type, err_2, existing, callbackUrl, result, statusId, dbStatus;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    paymentId = data.paymentId, mobile = data.mobile, productId = data.productId, amount = data.amount, currency = data.currency, type = data.type;
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 3, , 5]);
+                    return [4 /*yield*/, db_1.db.transaction.create({
+                            data: {
+                                externalId: "pending_".concat(paymentId), // Temporary ID
+                                paymentIntentId: paymentId,
+                                paymentId: paymentId,
+                                mobile: mobile,
+                                productId: productId,
+                                amount: amount,
+                                currency: currency,
+                                productType: type,
+                                status: 'PENDING' // ⏳ Lock status
+                            }
+                        })];
+                case 2:
+                    _a.sent();
+                    return [3 /*break*/, 5];
+                case 3:
+                    err_2 = _a.sent();
+                    // 🛑 If UNIQUE constraint fails, it means another process (Webhook or API) won the race
+                    console.log("[Purchase] Lock failed for ".concat(paymentId, " (Duplicate Request). Skipping."));
+                    return [4 /*yield*/, db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } })];
+                case 4:
+                    existing = _a.sent();
+                    return [2 /*return*/, __assign(__assign({ success: (existing === null || existing === void 0 ? void 0 : existing.status) === 'COMPLETED' }, existing), { dbStatus: existing === null || existing === void 0 ? void 0 : existing.status })];
+                case 5:
+                    // 2. 🚀 EXECUTE: We won the lock, so WE call DTOne
+                    console.log("[Purchase] Lock Acquired. Processing order for ".concat(paymentId, "..."));
+                    callbackUrl = process.env.DTONE_CALLBACK_URL ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/hooks/dtone") : undefined;
+                    return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount, currency, type, callbackUrl)];
+                case 6:
+                    result = _a.sent();
+                    if (!(!result.success || !result.data)) return [3 /*break*/, 9];
+                    console.error("[Purchase] \u274C API Error: ".concat(result.error));
+                    return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+                case 7:
+                    _a.sent();
+                    return [4 /*yield*/, db_1.db.transaction.update({
+                            where: { paymentIntentId: paymentId },
+                            data: { status: 'REFUNDED', externalId: "failed_".concat(paymentId) }
+                        })];
+                case 8:
+                    _a.sent();
+                    return [2 /*return*/, { success: false, error: result.error, code: result.code, refunded: true }];
+                case 9:
+                    statusId = result.data.statusId;
+                    dbStatus = 'PENDING';
+                    if (!(statusId === 7)) return [3 /*break*/, 10];
+                    // ✅ CASE 1: SUCCESS
+                    dbStatus = 'COMPLETED';
+                    console.log("[Purchase] \u2705 Success! Top-up sent. DTOne Ref: ".concat(result.data.externalId));
+                    return [3 /*break*/, 13];
+                case 10:
+                    if (![3, 9].includes(statusId || 0)) return [3 /*break*/, 12];
+                    // ❌ CASE 2: HARD FAILURE (Rejected/Declined)
+                    console.warn("[Purchase] \u26A0\uFE0F Transaction Declined (Status ".concat(statusId, "). Refund initiated..."));
+                    return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+                case 11:
+                    _a.sent();
+                    dbStatus = 'FAILED';
+                    return [3 /*break*/, 13];
+                case 12:
+                    // ⏳ CASE 3: PENDING/OTHER
+                    console.log("[Purchase] \u23F3 Transaction Submitted (Status ".concat(statusId, "). Waiting for callback."));
+                    _a.label = 13;
+                case 13: 
+                // Update Database with Final Status
+                return [4 /*yield*/, db_1.db.transaction.update({
+                        where: { paymentIntentId: paymentId },
+                        data: {
+                            status: dbStatus,
+                            externalId: result.data.externalId
+                        }
+                    })];
+                case 14:
+                    // Update Database with Final Status
+                    _a.sent();
+                    return [2 /*return*/, __assign(__assign({ success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }, result.data), { dbStatus: dbStatus, refunded: dbStatus === 'FAILED' })];
+            }
+        });
+    });
+}
 // ==================================================================
 // API ROUTES
 // ==================================================================
@@ -363,8 +413,9 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
         }
     });
 }); });
+// ✅ UPDATED PURCHASE ROUTE
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, existing, callbackUrl, result, refund, statusId, dbStatus, error_5;
+    var _a, productId, mobile, amount, unit, paymentId, type, result, error_5;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -373,63 +424,34 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     return [2 /*return*/, res.status(400).json({ error: 'Missing required fields' })];
                 _b.label = 1;
             case 1:
-                _b.trys.push([1, 10, , 12]);
-                return [4 /*yield*/, db_1.db.transaction.findFirst({
-                        where: { paymentIntentId: paymentId }
+                _b.trys.push([1, 3, , 4]);
+                return [4 /*yield*/, processPurchase({
+                        paymentId: paymentId,
+                        mobile: mobile,
+                        productId: Number(productId),
+                        amount: Number(amount || 0),
+                        currency: unit || 'UNKNOWN',
+                        type: type || 'UNKNOWN'
                     })];
             case 2:
-                existing = _b.sent();
-                if (existing) {
-                    console.log("[API] Payment ".concat(paymentId, " already processed by webhook."));
-                    return [2 /*return*/, res.json(__assign(__assign({ success: existing.status === 'COMPLETED' || existing.status === 'PENDING' }, existing), { dbStatus: existing.status }))];
-                }
-                callbackUrl = process.env.DTONE_CALLBACK_URL ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/callback") : undefined;
-                return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount || 0, unit, type, callbackUrl)];
-            case 3:
                 result = _b.sent();
-                if (!(!result.success || !result.data)) return [3 /*break*/, 5];
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
-            case 4:
-                refund = _b.sent();
-                return [2 /*return*/, res.status(400).json({ success: false, error: result.error, code: result.code, refunded: !!refund })];
-            case 5:
-                statusId = result.data.statusId;
-                dbStatus = 'PENDING';
-                if (!(statusId === 7)) return [3 /*break*/, 6];
-                dbStatus = 'COMPLETED';
-                return [3 /*break*/, 8];
-            case 6:
-                if (![3, 9].includes(statusId || 0)) return [3 /*break*/, 8];
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
-            case 7:
-                _b.sent();
-                dbStatus = 'FAILED';
-                _b.label = 8;
-            case 8: return [4 /*yield*/, db_1.db.transaction.create({
-                    data: {
-                        externalId: result.data.externalId, paymentIntentId: paymentId, paymentId: paymentId,
-                        mobile: mobile,
-                        productId: Number(productId), amount: Number(amount || 0),
-                        currency: unit || 'UNKNOWN', productType: type || 'UNKNOWN', status: dbStatus
-                    }
-                })];
-            case 9:
-                _b.sent();
-                return [2 /*return*/, res.json(__assign(__assign({ success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }, result.data), { dbStatus: dbStatus }))];
-            case 10:
+                return [2 /*return*/, res.json(result)];
+            case 3:
                 error_5 = _b.sent();
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
-            case 11:
-                _b.sent();
-                return [2 /*return*/, res.status(500).json({ success: false, error: 'Internal server error', refunded: true })];
-            case 12: return [2 /*return*/];
+                console.error("Purchase API Error:", error_5);
+                return [2 /*return*/, res.status(500).json({ success: false, error: 'Internal server error' })];
+            case 4: return [2 /*return*/];
         }
     });
 }); });
-app.post('/api/callback', function (req, res) { return __awaiter(void 0, void 0, void 0, function () { return __generator(this, function (_a) {
-    res.status(200).send('OK');
-    return [2 /*return*/];
-}); }); });
+// Callback Route
+app.post('/api/hooks/dtone', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        console.log('[DTOne Callback]', req.body);
+        res.status(200).send('OK');
+        return [2 /*return*/];
+    });
+}); });
 var DIST_PATH = path_1.default.join(process.cwd(), 'dist');
 app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, function (_req, res) { return res.sendFile(path_1.default.join(DIST_PATH, 'index.html')); });
