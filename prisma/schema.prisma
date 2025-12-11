@@ -19,12 +19,14 @@ model Transaction {
   amount          Float
   status          String
   currency        String
-  paymentId       String    @unique 
+  
+  // ✅ FIX: Removed @unique to allow retries/duplicates if necessary
+  paymentId       String     
+  
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
-// ✅ NEW: Product Catalog for Caching
 model Product {
   id            Int      @id 
   name          String
@@ -34,11 +36,10 @@ model Product {
   operatorId    Int
   
   // Pricing & Value
-  amount        Float?   
+  amount        Float?
   currency      String
   minAmount     Float?   
-  maxAmount     Float?   
-  
+  maxAmount     Float?
   updatedAt     DateTime @updatedAt
 
   @@index([operatorId]) 

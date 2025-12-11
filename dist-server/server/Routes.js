@@ -186,7 +186,7 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
                 o = _a.sent();
                 if (o)
                     OPERATOR_CACHE = o;
-                (0, sync_products_1.syncProducts)(); // ✅ Auto-start product sync in background
+                (0, sync_products_1.syncProducts)();
                 console.log("[Server] \uD83D\uDE80 System Ready!");
                 return [3 /*break*/, 4];
             case 3:
@@ -216,7 +216,6 @@ app.get('/api/operators', function (req, res) {
     }
     return res.json(OPERATOR_CACHE);
 });
-// ✅ CORRECT: GET /api/products (Supports Query Params)
 app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var _a, operatorId, currency_1, ranged, opId, whereClause, localProducts, mapped, result, apiProducts, error_2;
     return __generator(this, function (_b) {
@@ -274,18 +273,23 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
         }
     });
 }); });
+// ✅ UPDATED: Pass metadata to Stripe
 app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, amount, currency, result, error_3;
+    var _a, amount, currency, mobile, productId, type, result, error_3;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, amount = _a.amount, currency = _a.currency;
+                _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
                 if (!amount || !currency)
                     return [2 /*return*/, res.status(400).json({ error: 'Amount and currency are required' })];
                 _b.label = 1;
             case 1:
                 _b.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency)];
+                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency, {
+                        mobile: mobile,
+                        productId: productId,
+                        type: type
+                    })];
             case 2:
                 result = _b.sent();
                 res.json(result);

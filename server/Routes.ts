@@ -100,7 +100,7 @@ const initializeCache = async () => {
   try {
     const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
     const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
-    syncProducts(); // ✅ Auto-start product sync in background
+    syncProducts(); 
     console.log(`[Server] 🚀 System Ready!`);
   } catch (e) { console.error("Cache init failed", e); }
 };
@@ -125,7 +125,6 @@ app.get('/api/operators', (req: Request, res: Response): any => {
   return res.json(OPERATOR_CACHE);
 });
 
-// ✅ CORRECT: GET /api/products (Supports Query Params)
 app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   try {
     const { operatorId, currency, ranged } = req.query; 
@@ -180,11 +179,18 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
+// ✅ UPDATED: Pass metadata to Stripe
 app.post('/api/create-payment-intent', async (req: Request, res: Response): Promise<any> => {
-  const { amount, currency } = req.body;
+  const { amount, currency, mobile, productId, type } = req.body; 
+  
   if (!amount || !currency) return res.status(400).json({ error: 'Amount and currency are required' });
+  
   try {
-    const result = await paymentService.createPaymentIntent(amount, currency);
+    const result = await paymentService.createPaymentIntent(amount, currency, {
+      mobile,
+      productId,
+      type
+    });
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });

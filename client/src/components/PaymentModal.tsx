@@ -12,16 +12,15 @@ if (!STRIPE_KEY) {
 
 const stripePromise = loadStripe(STRIPE_KEY);
 
-// ✅ FIX 1: Update Interface to accept new data
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSuccess: (paymentId: string) => Promise<void>;
   amount: number;
   currency: string;
-  mobile: string;       // 👈 Added
-  productId: number;    // 👈 Added
-  productType: string;  // 👈 Added
+  mobile: string;
+  productId: number;
+  productType: string;
 }
 
 function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> }) {
@@ -94,16 +93,15 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
   );
 }
 
-// ✅ FIX 2: Destructure new props here so they are available in scope
 export default function PaymentModal({ 
   isOpen, 
   onClose, 
   onSuccess, 
   amount, 
   currency, 
-  mobile,      // 👈 Added
-  productId,   // 👈 Added
-  productType  // 👈 Added
+  mobile, 
+  productId, 
+  productType 
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -121,7 +119,7 @@ export default function PaymentModal({
       fetch(`${BASE_URL}/api/create-payment-intent`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        // ✅ FIX 3: Now these variables exist in scope!
+        // ✅ CRITICAL FIX: Ensure metadata is passed for webhooks
         body: JSON.stringify({ 
           amount, 
           currency, 
@@ -149,7 +147,7 @@ export default function PaymentModal({
       fetchedRef.current = false;
       setClientSecret('');
     }
-  }, [isOpen, amount, currency, mobile, productId, productType]); // Added dependencies
+  }, [isOpen, amount, currency, mobile, productId, productType]); 
 
   if (!isOpen) return null;
 

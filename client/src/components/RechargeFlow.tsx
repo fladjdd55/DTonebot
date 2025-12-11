@@ -12,11 +12,11 @@ import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 
 // ✅ $5 Minimum Limit for USD products
-const MIN_USD_AMOUNT = 1;
+const MIN_USD_AMOUNT = 5;
 
 // Helper to filter out small USD products
 const isProductEligible = (p: Product) => {
-  if (p.currency !== 'USD') return true; // Allow small amounts for other currencies (NGN, INR, etc.)
+  if (p.currency !== 'USD') return true; 
   const price = parseFloat(p.amount.split(' ')[0]);
   return price >= MIN_USD_AMOUNT;
 };
@@ -43,59 +43,54 @@ export default function RechargeFlow() {
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
   const [isPurchasing, setIsPurchasing] = useState(false);
 
-  // ✅ FILTERS
+  // FILTERS
   const [currency, setCurrency] = useState(''); 
-  const [priceFilter, setPriceFilter] = useState<number | 'ALL'>('ALL'); // Quick Price Filter
+  const [priceFilter, setPriceFilter] = useState<number | 'ALL'>('ALL'); 
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
   
-  // ✅ FIX: Removed unused 'operatorsOffline'
   const { operators: availableOperators, usingFallback: operatorsFallback } = useOperators(selectedCountry?.iso3);
 
-  // 1. Fetch All Products
+  // Fetch All Products
   const { products: allProducts, loading: productsLoading } = useProducts(
     operator?.operatorId, 
     '', 
-    undefined // No ranged filter needed, we filter client-side
+    undefined 
   );
 
-  // 2. Dynamic Currencies
+  // Dynamic Currencies
   const availableCurrencies = useMemo(() => {
     if (!allProducts.length) return [];
     const currencies = new Set(allProducts.map(p => p.currency));
     return Array.from(currencies).sort(); 
   }, [allProducts]);
 
-  // 🚀 SMART AUTO-SELECT CURRENCY
+  // SMART AUTO-SELECT CURRENCY
   useEffect(() => {
     if (availableCurrencies.length > 0) {
       if (!currency || !availableCurrencies.includes(currency)) {
         if (availableCurrencies.includes('USD')) {
           setCurrency('USD');
         } else {
-          setCurrency(''); // Default to 'All'
+          setCurrency(''); 
         }
       }
     }
   }, [availableCurrencies, currency]);
 
-  // 3. ✅ FILTER LOGIC
+  // FILTER LOGIC
   const filteredProducts = useMemo(() => {
     let list = allProducts;
 
-    // A. Show ONLY Fixed Products (Hide Custom/Ranged)
     list = list.filter(p => !p.type.includes('RANGED'));
 
-    // B. Currency Filter
     if (currency) {
       list = list.filter(p => p.currency === currency);
     }
 
-    // C. Global Min Price Check ($5 USD Rule)
     list = list.filter(isProductEligible);
 
-    // D. Quick Amount Filter
     if (priceFilter !== 'ALL') {
       list = list.filter(p => {
         const price = parseFloat(p.amount.split(' ')[0]);
@@ -106,7 +101,7 @@ export default function RechargeFlow() {
     return list;
   }, [allProducts, currency, priceFilter]);
 
-  // 4. Categorize for Tabs
+  // Categorize for Tabs
   const categorizedProducts = useMemo(() => {
     return {
       AIRTIME: filteredProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
@@ -237,9 +232,12 @@ export default function RechargeFlow() {
 
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
     setIsPayModalOpen(true);
+    
+    // Kept to prevent double-clicks on the main UI while modal opens
     setIsPurchasing(false); 
   };
 
+  // ✅ UPDATED: Robust Error Handling
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     setLoading(true); 
@@ -255,6 +253,7 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
+      // Explicitly check for failure states to throw error
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
@@ -263,12 +262,15 @@ export default function RechargeFlow() {
       }
 
       setTxnResult(result);
-      setIsPayModalOpen(false);
+      setIsPayModalOpen(false); // Success - Close Modal
       setStep(3); 
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      throw err;
+      // ✅ FIX: Show error to user and close modal so they can retry or see the message
+      setApiError(err.message || 'Transaction failed');
+      setIsPayModalOpen(false); 
+      // throw err; // Optional: re-throw if PaymentModal needs to know, but we handled UI here.
     } finally {
       setLoading(false);
     }
@@ -292,7 +294,6 @@ export default function RechargeFlow() {
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
         <div className="bg-indigo-600 p-6 text-white relative">
-          {/* ✅ Replaced operatorsOffline with operatorsFallback logic */}
           {(usingFallback || operatorsFallback) && (
             <div className="absolute top-4 right-4 bg-yellow-400 text-yellow-900 text-[10px] font-bold px-2 py-0.5 rounded-full flex items-center gap-1 shadow-sm">
               <Wifi className="w-3 h-3" /> OFFLINE
@@ -475,7 +476,7 @@ export default function RechargeFlow() {
                 <button onClick={resetFlow} className="text-sm text-blue-600 underline">Change</button>
               </div>
 
-              {/* 🟢 NEW: QUICK PRICE FILTERS */}
+              {/* QUICK PRICE FILTERS */}
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 <button 
                   onClick={() => setPriceFilter('ALL')} 
