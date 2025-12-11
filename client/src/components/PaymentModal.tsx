@@ -21,14 +21,24 @@ interface PaymentModalProps {
   mobile: string;
   productId: number;
   productType: string;
-  transactionError?: string; // ✅ FIX: Added this property
+  transactionError?: string; // ✅ Added
+  isProcessingTransaction?: boolean; // ✅ Added
 }
 
-function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> }) {
+function CheckoutForm({ 
+  onSuccess, 
+  isProcessingTransaction 
+}: { 
+  onSuccess: (id: string) => Promise<void>;
+  isProcessingTransaction?: boolean; // ✅ Added
+}) {
   const stripe = useStripe();
   const elements = useElements();
   const [message, setMessage] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+
+  // ✅ Combined loading state
+  const isLoading = isProcessing || isProcessingTransaction;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -89,11 +99,18 @@ function CheckoutForm({ onSuccess }: { onSuccess: (id: string) => Promise<void> 
       )}
 
       <button
-        disabled={isProcessing || !stripe || !elements}
+        disabled={isLoading || !stripe || !elements} // ✅ Use combined loading
         id="submit"
-        className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 flex justify-center items-center gap-2"
+        className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
       >
-        {isProcessing ? <Loader2 className="animate-spin" /> : <><Lock className="w-4 h-4" /> Pay Now</>}
+        {isLoading ? ( // ✅ Show different states
+          <>
+            <Loader2 className="animate-spin w-4 h-4" /> 
+            {isProcessingTransaction ? 'Processing Transaction...' : 'Processing Payment...'}
+          </>
+        ) : (
+          <><Lock className="w-4 h-4" /> Pay Now</>
+        )}
       </button>
     </form>
   );
@@ -108,7 +125,8 @@ export default function PaymentModal({
   mobile, 
   productId, 
   productType,
-  transactionError // ✅ FIX: Destructure this prop
+  transactionError, // ✅ Destructure
+  isProcessingTransaction // ✅ Destructure
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -165,7 +183,11 @@ export default function PaymentModal({
             <h3 className="font-bold text-gray-800">Secure Payment</h3>
             <p className="text-xs text-gray-500">Powered by Stripe</p>
           </div>
-          <button onClick={onClose} className="text-gray-400 hover:text-gray-600">
+          <button 
+            onClick={onClose} 
+            disabled={isProcessingTransaction} // ✅ Prevent close during processing
+            className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
             <X className="w-5 h-5" />
           </button>
         </div>
@@ -177,17 +199,23 @@ export default function PaymentModal({
             </span>
           </div>
 
-          {/* ✅ TRANSACTION ERROR DISPLAY (From Parent) */}
+          {/* ✅ TRANSACTION ERROR DISPLAY */}
           {transactionError && (
-            <div className="p-3 bg-red-50 text-red-600 text-sm rounded flex items-center gap-2 mb-4 border border-red-100">
-              <AlertCircle className="w-4 h-4 shrink-0" /> 
-              <span>{transactionError}</span>
+            <div className="p-4 bg-red-50 text-red-600 text-sm rounded-lg flex items-start gap-3 mb-4 border-2 border-red-200">
+              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" /> 
+              <div className="flex-1">
+                <p className="font-semibold mb-1">Transaction Failed</p>
+                <p>{transactionError}</p>
+              </div>
             </div>
           )}
 
           {clientSecret ? (
             <Elements key={clientSecret} options={{ clientSecret, appearance: { theme: 'stripe' } }} stripe={stripePromise}>
-              <CheckoutForm onSuccess={onSuccess} />
+              <CheckoutForm 
+                onSuccess={onSuccess} 
+                isProcessingTransaction={isProcessingTransaction} // ✅ Pass state
+              />
             </Elements>
           ) : initError ? (
             <div className="flex flex-col items-center justify-center py-6 text-center text-red-600 space-y-2">

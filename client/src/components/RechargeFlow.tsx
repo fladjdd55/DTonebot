@@ -42,6 +42,7 @@ export default function RechargeFlow() {
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
   const [isPurchasing, setIsPurchasing] = useState(false);
+  const [isProcessingTransaction, setIsProcessingTransaction] = useState(false); // ✅ Added state
 
   // FILTERS
   const [currency, setCurrency] = useState(''); 
@@ -236,10 +237,13 @@ export default function RechargeFlow() {
     setIsPurchasing(false); 
   };
 
-  // ✅ UPDATED: Clean Logic - No throwing
+  // ✅ UPDATED: Clean Logic - Handles backend state & errors properly
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
-    setLoading(true); 
+    
+    // ✅ Set processing state to show loading indicator in Modal
+    setIsProcessingTransaction(true);
+    setApiError(''); // Clear any previous errors
 
     try {
       const result = await rechargeApi.purchase(
@@ -256,22 +260,32 @@ export default function RechargeFlow() {
           ? `Transaction failed. Your payment has been refunded automatically.`
           : `Transaction failed: ${result.message || result.error || 'Unknown error'}`;
         
-        // ✅ Set Error, Stop Loading, Return (Keeps modal open)
+        // ✅ Set Error and stop processing, but KEEP MODAL OPEN so user sees the error
         setApiError(errorMsg);
-        setLoading(false);
-        return;
+        setIsProcessingTransaction(false);
+        return; 
       }
 
+      // ✅ Success case
       setTxnResult(result);
-      setIsPayModalOpen(false); // Success - Close Modal
+      setIsPayModalOpen(false); // Close Modal
+      setIsProcessingTransaction(false);
       setStep(3); 
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      // ✅ Set Error, Stop Loading (Keeps modal open)
-      setApiError(err.message || 'Transaction failed');
-      setLoading(false);
+      // ✅ Set Error and stop processing, but KEEP MODAL OPEN
+      setApiError(err.message || 'Transaction failed. Please try again.');
+      setIsProcessingTransaction(false);
     }
+  };
+
+  // ✅ Added proper close handler
+  const handleCloseModal = () => {
+    setIsPayModalOpen(false);
+    setApiError('');
+    setPendingTxn(null);
+    setIsProcessingTransaction(false);
   };
 
   const resetFlow = () => {
@@ -615,14 +629,15 @@ export default function RechargeFlow() {
           {pendingTxn && isPayModalOpen && (
              <PaymentModal
                isOpen={isPayModalOpen}
-               onClose={() => setIsPayModalOpen(false)}
+               onClose={handleCloseModal} // ✅ Updated Close Handler
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
                onSuccess={executeTransaction} 
                mobile={pendingTxn.mobile}
                productId={pendingTxn.product.id}
                productType={pendingTxn.product.type}
-               transactionError={apiError} // ✅ Pass error to modal
+               transactionError={apiError} // ✅ Pass error
+               isProcessingTransaction={isProcessingTransaction} // ✅ Pass backend state
              />
           )}
 
