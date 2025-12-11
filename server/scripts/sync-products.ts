@@ -105,34 +105,40 @@ export async function syncProducts() {
 
                 // CASE 3: Success
                 if (apiRes.data && apiRes.data.length > 0) {
+                    // ✅ FIX: Handle individual writes safely
                     const upsertPromises = apiRes.data.map((p) => {
-                    const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
-                    return db.product.upsert({
-                        where: { id: p.id },
-                        update: {
-                            name: p.name,
-                            amount: fixedAmount,
-                            minAmount: p.min,
-                            maxAmount: p.max,
-			    serviceId: p.subserviceId || 1,
-                            updatedAt: new Date()
-                        },
-                        create: {
-                            id: p.id,
-                            name: p.name,
-                            type: p.type,
-                            serviceId: p.subserviceId || 1, 
-                            operatorId: op.id,
-                            currency: p.currency,
-                            amount: fixedAmount,
-                            minAmount: p.min,
-                            maxAmount: p.max
-                        }
-                    });
+                        const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                        return db.product.upsert({
+                            where: { id: p.id },
+                            update: {
+                                name: p.name,
+                                amount: fixedAmount,
+                                minAmount: p.min,
+                                maxAmount: p.max,
+                                serviceId: p.subserviceId || 1,
+                                updatedAt: new Date()
+                            },
+                            create: {
+                                id: p.id,
+                                name: p.name,
+                                type: p.type,
+                                serviceId: p.subserviceId || 1, 
+                                operatorId: op.id,
+                                currency: p.currency,
+                                amount: fixedAmount,
+                                minAmount: p.min,
+                                maxAmount: p.max
+                            }
+                        }).catch(err => {
+                            // ✅ Log error specifically for this product but DON'T crash the loop
+                            console.error(`   ❌ Failed to save product ${p.id}:`, err.message);
+                            return null;
+                        });
                     });
 
-                    await Promise.all(upsertPromises);
-                    productsSaved += apiRes.data.length;
+                    const results = await Promise.all(upsertPromises);
+                    // ✅ Count only successful writes
+                    productsSaved += results.filter(r => r !== null).length;
                 }
                 
                 opSuccess = true; // Mark done

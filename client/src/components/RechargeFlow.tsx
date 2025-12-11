@@ -11,8 +11,8 @@ import { filterCountries, type Country } from '../shared/countryValidator';
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 
-// ✅ $5 Minimum Limit for USD products
-const MIN_USD_AMOUNT = 5;
+// ✅ Load from ENV, fallback to 5 if missing
+const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_ORDER_USD) || 5;
 
 // Helper to filter out small USD products
 const isProductEligible = (p: Product) => {
@@ -42,7 +42,7 @@ export default function RechargeFlow() {
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
   const [isPurchasing, setIsPurchasing] = useState(false);
-  const [isProcessingTransaction, setIsProcessingTransaction] = useState(false); // ✅ Added state
+  const [isProcessingTransaction, setIsProcessingTransaction] = useState(false);
 
   // FILTERS
   const [currency, setCurrency] = useState(''); 
@@ -237,13 +237,12 @@ export default function RechargeFlow() {
     setIsPurchasing(false); 
   };
 
-  // ✅ UPDATED: Clean Logic - Handles backend state & errors properly
+  // ✅ UPDATED: Robust Transaction Handler
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
-    // ✅ Set processing state to show loading indicator in Modal
     setIsProcessingTransaction(true);
-    setApiError(''); // Clear any previous errors
+    setApiError(''); // Clear immediately
 
     try {
       const result = await rechargeApi.purchase(
@@ -255,32 +254,38 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
+      // ✅ FIX: Check for any failure state
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
           : `Transaction failed: ${result.message || result.error || 'Unknown error'}`;
         
-        // ✅ Set Error and stop processing, but KEEP MODAL OPEN so user sees the error
         setApiError(errorMsg);
         setIsProcessingTransaction(false);
+        // Keep modal open to show error
         return; 
       }
 
-      // ✅ Success case
+      // ✅ SUCCESS: Close modal and show result
       setTxnResult(result);
-      setIsPayModalOpen(false); // Close Modal
       setIsProcessingTransaction(false);
-      setStep(3); 
+      setPendingTxn(null); // Clear pending transaction
+      setApiError(''); // Clear any errors
+      
+      // Use setTimeout to ensure state updates before closing
+      setTimeout(() => {
+        setIsPayModalOpen(false);
+        setStep(3); 
+      }, 100);
       
     } catch (err: any) {
       console.error("Transaction Error:", err);
-      // ✅ Set Error and stop processing, but KEEP MODAL OPEN
       setApiError(err.message || 'Transaction failed. Please try again.');
       setIsProcessingTransaction(false);
+      // Keep modal open to show error
     }
   };
 
-  // ✅ Added proper close handler
   const handleCloseModal = () => {
     setIsPayModalOpen(false);
     setApiError('');
@@ -629,15 +634,16 @@ export default function RechargeFlow() {
           {pendingTxn && isPayModalOpen && (
              <PaymentModal
                isOpen={isPayModalOpen}
-               onClose={handleCloseModal} // ✅ Updated Close Handler
+               onClose={handleCloseModal} 
                amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
                currency={pendingTxn.product.currency}
                onSuccess={executeTransaction} 
                mobile={pendingTxn.mobile}
                productId={pendingTxn.product.id}
                productType={pendingTxn.product.type}
-               transactionError={apiError} // ✅ Pass error
-               isProcessingTransaction={isProcessingTransaction} // ✅ Pass backend state
+               transactionError={apiError} 
+               isProcessingTransaction={isProcessingTransaction}
+               onClearError={() => setApiError('')} // ✅ Pass error clearing function
              />
           )}
 

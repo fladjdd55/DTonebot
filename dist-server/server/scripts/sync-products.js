@@ -121,7 +121,7 @@ function syncProducts() {
                     productsSaved_1 = 0;
                     tasks = opList_1.map(function (op) {
                         return limit_1(function () { return __awaiter(_this, void 0, void 0, function () {
-                            var opSuccess, opRetries, apiRes, upsertPromises, err_1;
+                            var opSuccess, opRetries, apiRes, upsertPromises, results, err_1;
                             var _a;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
@@ -175,12 +175,17 @@ function syncProducts() {
                                                     minAmount: p.min,
                                                     maxAmount: p.max
                                                 }
+                                            }).catch(function (err) {
+                                                // ✅ Log error specifically for this product but DON'T crash the loop
+                                                console.error("   \u274C Failed to save product ".concat(p.id, ":"), err.message);
+                                                return null;
                                             });
                                         });
                                         return [4 /*yield*/, Promise.all(upsertPromises)];
                                     case 6:
-                                        _b.sent();
-                                        productsSaved_1 += apiRes.data.length;
+                                        results = _b.sent();
+                                        // ✅ Count only successful writes
+                                        productsSaved_1 += results.filter(function (r) { return r !== null; }).length;
                                         _b.label = 7;
                                     case 7:
                                         opSuccess = true; // Mark done

@@ -204,7 +204,7 @@ node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0,
 // ==================================================================
 function processPurchase(data) {
     return __awaiter(this, void 0, void 0, function () {
-        var paymentId, mobile, productId, amount, currency, type, err_2, existing, callbackUrl, result, statusId, dbStatus;
+        var paymentId, mobile, productId, amount, currency, type, err_2, existing, isSuccess, callbackUrl, result, statusId, dbStatus;
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
@@ -235,7 +235,8 @@ function processPurchase(data) {
                     return [4 /*yield*/, db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } })];
                 case 4:
                     existing = _a.sent();
-                    return [2 /*return*/, __assign(__assign({ success: (existing === null || existing === void 0 ? void 0 : existing.status) === 'COMPLETED' }, existing), { dbStatus: existing === null || existing === void 0 ? void 0 : existing.status })];
+                    isSuccess = (existing === null || existing === void 0 ? void 0 : existing.status) === 'COMPLETED' || (existing === null || existing === void 0 ? void 0 : existing.status) === 'PENDING';
+                    return [2 /*return*/, __assign(__assign({ success: isSuccess }, existing), { dbStatus: existing === null || existing === void 0 ? void 0 : existing.status })];
                 case 5:
                     // 2. 🚀 EXECUTE: We won the lock, so WE call DTOne
                     console.log("[Purchase] Lock Acquired. Processing order for ".concat(paymentId, "..."));

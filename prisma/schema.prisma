@@ -10,10 +10,8 @@ datasource db {
 model Transaction {
   id              String   @id @default(uuid())
   externalId      String   @unique
-  
-  // ✅ FIX: This MUST be @unique to act as a "lock" against race conditions.
-  // If a second request tries to use the same Stripe ID, the DB will reject it.
   paymentIntentId String?  @unique
+  paymentId       String?    
   
   mobile          String
   productId       Int
@@ -21,9 +19,6 @@ model Transaction {
   amount          Float
   status          String
   currency        String
-  
-  // Optional: You can keep this for legacy references, but paymentIntentId is the main key
-  paymentId       String?
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

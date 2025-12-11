@@ -19,7 +19,7 @@ const API_URL = `${BASE_URL}/api`;
 // ✅ FIX: Define a reasonable timeout (e.g., 60s)
 // This is longer than the Backend's 20s DTOne timeout to allow for overhead,
 // but ensures the UI doesn't hang indefinitely.
-const REQUEST_TIMEOUT_MS = 60000;
+const REQUEST_TIMEOUT_MS = 90000;
 
 /**
  * Helper to wrap fetch with a timeout

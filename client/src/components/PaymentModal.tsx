@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useRef, useMemo } from 'react'; // ✅ Import useMemo
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { loadStripe } from '@stripe/stripe-js';
 import { Elements, PaymentElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import { X, Lock, Loader2, AlertCircle } from 'lucide-react';
@@ -23,14 +23,17 @@ interface PaymentModalProps {
   productType: string;
   transactionError?: string;
   isProcessingTransaction?: boolean;
+  onClearError?: () => void; // ✅ Added prop
 }
 
 function CheckoutForm({ 
   onSuccess, 
-  isProcessingTransaction 
+  isProcessingTransaction,
+  onClearError // ✅ Added prop
 }: { 
   onSuccess: (id: string) => Promise<void>;
   isProcessingTransaction?: boolean;
+  onClearError?: () => void; // ✅ Added prop
 }) {
   const stripe = useStripe();
   const elements = useElements();
@@ -46,6 +49,7 @@ function CheckoutForm({
 
     setIsProcessing(true);
     setMessage(null);
+    onClearError?.(); // ✅ Clear parent error on retry
 
     try {
       // 1. Submit the form elements first
@@ -98,7 +102,7 @@ function CheckoutForm({
 
       <button
         disabled={isLoading || !stripe || !elements}
-        type="submit" // ✅ Explicit type
+        type="submit"
         className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
       >
         {isLoading ? (
@@ -124,7 +128,8 @@ export default function PaymentModal({
   productId, 
   productType,
   transactionError,
-  isProcessingTransaction
+  isProcessingTransaction,
+  onClearError // ✅ Destructure prop
 }: PaymentModalProps) {
   
   const [clientSecret, setClientSecret] = useState('');
@@ -171,7 +176,7 @@ export default function PaymentModal({
     }
   }, [isOpen, amount, currency, mobile, productId, productType]); 
 
-  // ✅ FIX: Memoize options to prevent re-initialization of Elements
+  // Memoize options to prevent re-initialization of Elements
   const elementsOptions = useMemo(() => ({
     clientSecret,
     appearance: { theme: 'stripe' as const },
@@ -214,11 +219,11 @@ export default function PaymentModal({
           )}
 
           {clientSecret ? (
-            // ✅ FIX: Use memoized options
             <Elements key={clientSecret} options={elementsOptions} stripe={stripePromise}>
               <CheckoutForm 
                 onSuccess={onSuccess} 
                 isProcessingTransaction={isProcessingTransaction}
+                onClearError={onClearError} // ✅ Pass prop
               />
             </Elements>
           ) : initError ? (

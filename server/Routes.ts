@@ -129,10 +129,18 @@ async function processPurchase(data: { paymentId: string, mobile: string, produc
   } catch (err: any) {
     // 🛑 If UNIQUE constraint fails, it means another process (Webhook or API) won the race
     console.log(`[Purchase] Lock failed for ${paymentId} (Duplicate Request). Skipping.`);
-    
+
     // Fetch the existing one to return valid status to API
     const existing = await db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
-    return { success: existing?.status === 'COMPLETED', ...existing, dbStatus: existing?.status };
+
+    // ✅ FIX: Treat 'PENDING' as success so the UI shows "Processing" instead of "Failed"
+    const isSuccess = existing?.status === 'COMPLETED' || existing?.status === 'PENDING';
+
+    return {
+      success: isSuccess,
+      ...existing,
+      dbStatus: existing?.status
+    };
   }
 
   // 2. 🚀 EXECUTE: We won the lock, so WE call DTOne
