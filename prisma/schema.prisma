@@ -17,8 +17,8 @@ model Transaction {
   productId       Int
   productType     String    
   amount          Float
-  status          String
   currency        String
+  status          String
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
