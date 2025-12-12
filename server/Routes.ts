@@ -322,6 +322,28 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
+// ✅ NEW STATUS CHECK ROUTE
+app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Promise<any> => {
+  const { paymentId } = req.params;
+  try {
+    const txn = await db.transaction.findUnique({
+      where: { paymentIntentId: paymentId }
+    });
+
+    if (!txn) {
+       return res.status(404).json({ error: 'Transaction not found' });
+    }
+
+    return res.json({ 
+      status: txn.status, 
+      externalId: txn.externalId 
+    });
+  } catch (error: any) {
+    console.error("Status Check Error:", error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
 // Callback Route
 app.post('/api/hooks/dtone', async (req: Request, res: Response) => { 
   console.log('[DTOne Callback]', req.body);

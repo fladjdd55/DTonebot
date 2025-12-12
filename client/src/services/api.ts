@@ -1,5 +1,3 @@
-// client/src/services/api.ts
-
 export interface Product {
   id: number;
   name: string;
@@ -16,9 +14,7 @@ export interface Product {
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const API_URL = `${BASE_URL}/api`;
 
-// ✅ FIX: Define a reasonable timeout (e.g., 60s)
-// This is longer than the Backend's 20s DTOne timeout to allow for overhead,
-// but ensures the UI doesn't hang indefinitely.
+// ✅ FIX: Define a reasonable timeout (e.g., 90s)
 const REQUEST_TIMEOUT_MS = 90000;
 
 /**
@@ -87,6 +83,17 @@ export const rechargeApi = {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');
+    return data;
+  },
+
+  // ✅ NEW METHOD: Check Transaction Status (Fixes your TS Error)
+  async checkStatus(paymentId: string) {
+    const res = await fetchWithTimeout(`${API_URL}/transaction/${paymentId}`, {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to check status');
     return data;
   }
 };

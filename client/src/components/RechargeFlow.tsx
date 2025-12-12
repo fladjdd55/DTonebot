@@ -1,3 +1,5 @@
+// client/src/components/RechargeFlow.tsx
+// ... (imports remain the same)
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, Check, AlertCircle, Phone, Loader2, Wifi, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
@@ -237,15 +239,16 @@ export default function RechargeFlow() {
     setIsPurchasing(false); 
   };
 
-  // ✅ UPDATED: Robust Transaction Handler
+  // ✅ UPDATED: Polling Transaction Handler
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
     setIsProcessingTransaction(true);
-    setApiError(''); // Clear immediately
+    setApiError('');
 
     try {
-      const result = await rechargeApi.purchase(
+      // 1. Initial Purchase Request
+      let result = await rechargeApi.purchase(
         pendingTxn.product.id,       
         pendingTxn.mobile,           
         pendingTxn.amount,           
@@ -254,7 +257,34 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
-      // ✅ FIX: Check for any failure state
+      // 2. Race Condition Handling: If PENDING, Poll for updates
+      if (result.success && result.dbStatus === 'PENDING') {
+         const MAX_RETRIES = 15; // 30 seconds max
+         let retries = 0;
+         
+         while (retries < MAX_RETRIES) {
+            // Wait 2 seconds
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            try {
+              const statusUpdate = await rechargeApi.checkStatus(paymentId);
+              
+              if (statusUpdate.status === 'COMPLETED') {
+                  result = { ...result, success: true, dbStatus: 'COMPLETED', ...statusUpdate };
+                  break; 
+              }
+              if (statusUpdate.status === 'FAILED' || statusUpdate.status === 'REFUNDED') {
+                  result = { ...result, success: false, dbStatus: statusUpdate.status, refunded: statusUpdate.status === 'REFUNDED' };
+                  break; 
+              }
+            } catch (pollErr) {
+              console.warn("Polling status failed:", pollErr);
+            }
+            retries++;
+         }
+      }
+
+      // 3. Final Check
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
@@ -262,17 +292,15 @@ export default function RechargeFlow() {
         
         setApiError(errorMsg);
         setIsProcessingTransaction(false);
-        // Keep modal open to show error
         return; 
       }
 
-      // ✅ SUCCESS: Close modal and show result
+      // 4. Success
       setTxnResult(result);
       setIsProcessingTransaction(false);
-      setPendingTxn(null); // Clear pending transaction
-      setApiError(''); // Clear any errors
+      setPendingTxn(null); 
+      setApiError(''); 
       
-      // Use setTimeout to ensure state updates before closing
       setTimeout(() => {
         setIsPayModalOpen(false);
         setStep(3); 
@@ -282,7 +310,6 @@ export default function RechargeFlow() {
       console.error("Transaction Error:", err);
       setApiError(err.message || 'Transaction failed. Please try again.');
       setIsProcessingTransaction(false);
-      // Keep modal open to show error
     }
   };
 
@@ -643,7 +670,7 @@ export default function RechargeFlow() {
                productType={pendingTxn.product.type}
                transactionError={apiError} 
                isProcessingTransaction={isProcessingTransaction}
-               onClearError={() => setApiError('')} // ✅ Pass error clearing function
+               onClearError={() => setApiError('')} 
              />
           )}
 
