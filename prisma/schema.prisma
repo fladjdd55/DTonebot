@@ -19,6 +19,7 @@ model Transaction {
   amount          Float
   currency        String
   status          String
+  processedVia    String?  // "API" or "WEBHOOK" - tracks who handled it
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
