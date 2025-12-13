@@ -1,4 +1,3 @@
-
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path'; 
@@ -25,7 +24,7 @@ const PORT = process.env.PORT || 5000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
 
 // ==================================================================
-// 🔒 SECURITY CONFIGURATION (Adjusted)
+// 🔒 SECURITY CONFIGURATION
 // ==================================================================
 
 // 1. Helmet - Content Security Policy
@@ -33,11 +32,10 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for React
+      styleSrc: ["'self'", "'unsafe-inline'"],
       scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"], 
       frameSrc: ["https://js.stripe.com"],
-      connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"], // Allow WebSocket for Dev
-      // ✅ FIX: Allow images from data URIs (flags) and HTTPS (operator logos)
+      connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"],
       imgSrc: ["'self'", "data:", "https:"] 
     }
   }
@@ -80,103 +78,18 @@ console.log(`🔒 CORS Configured. Environment: ${process.env.NODE_ENV}`);
 
 // 5. Rate Limiter
 const apiLimiter = rateLimit({
-	windowMs: 15 * 60 * 1000, 
-	max: 100,
-	standardHeaders: true, 
-	legacyHeaders: false, 
-    validate: { xForwardedForHeader: false }, 
-    message: { error: "Too many requests, please try again later." }
+  windowMs: 15 * 60 * 1000, 
+  max: 100,
+  standardHeaders: true, 
+  legacyHeaders: false, 
+  validate: { xForwardedForHeader: false }, 
+  message: { error: "Too many requests, please try again later." }
 });
 
 app.use('/api/', apiLimiter); 
 
 // ✅ SECURITY: Webhook Replay Protection Set
 const processedWebhooks = new Set<string>();
-
-// ==================================================================
-// 1. STRIPE WEBHOOK
-// ==================================================================
-app.post('/api/hooks/stripe', express.raw({ type: 'application/json' }), async (req: Request, res: Response): Promise<any> => {
-    const sig = req.headers['stripe-signature'];
-    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-    if (!webhookSecret) return res.status(500).send('Webhook secret not configured');
-    if (!sig) return res.status(400).send('Missing signature');
-
-    let event: Stripe.Event;
-    try {
-      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-    } catch (err: any) {
-      console.error(`Webhook Signature Error: ${err.message}`);
-      return res.status(400).send(`Webhook Error: ${err.message}`);
-    }
-
-    if (processedWebhooks.has(event.id)) {
-      console.log(`[Webhook] ⚠️ Duplicate event ${event.id}, ignoring.`);
-      return res.json({ received: true });
-    }
-    processedWebhooks.add(event.id);
-    setTimeout(() => processedWebhooks.delete(event.id), 24 * 60 * 60 * 1000);
-
-    try {
-      if (event.type === 'payment_intent.succeeded') {
-        const paymentIntent = event.data.object as Stripe.PaymentIntent;
-        console.log(`[Webhook] Payment Succeeded: ${paymentIntent.id}`);
-        
-        await processPurchase({
-          paymentId: paymentIntent.id,
-          mobile: paymentIntent.metadata.mobile,
-          productId: Number(paymentIntent.metadata.productId),
-          amount: paymentIntent.amount / 100,
-          currency: paymentIntent.currency.toUpperCase(),
-          type: paymentIntent.metadata.type || 'UNKNOWN'
-        });
-      }
-      res.json({ received: true });
-    } catch (error: any) {
-      console.error('Webhook handler failed:', error);
-      res.status(500).send('Webhook handler failed');
-    }
-});
-
-app.use(express.json());
-
-// ==================================================================
-// 🚀 CACHE & SCHEDULER
-// ==================================================================
-let COUNTRY_CACHE: any[] = [];
-let OPERATOR_CACHE: any[] = []; 
-
-const initializeCache = async () => {
-  console.log('[Server] ⏳ Initializing Caches...');
-  try {
-    const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
-    const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
-    
-    if (process.env.SYNC_ON_STARTUP === 'true') {
-      console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
-      syncProducts(); 
-    } else {
-      console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
-    }
-    console.log(`[Server] 🚀 System Ready!`);
-  } catch (e) { console.error("Cache init failed", e); }
-};
-
-initializeCache();
-
-cron.schedule('0 3 * * *', async () => {
-  console.log('[Scheduler] 🌙 3 AM Sync Starting...');
-  try {
-    const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
-    const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
-    await syncProducts();
-    console.log('[Scheduler] ✅ Daily sync complete.');
-  } catch (err) {
-    console.error('[Scheduler] ❌ Daily sync failed:', err);
-  }
-});
-
 
 // ==================================================================
 // 🧩 UNIFIED PURCHASE LOGIC
@@ -202,14 +115,12 @@ async function processPurchase(
   });
 
   if (existing) {
-    // Already exists - check status
     if (existing.status === 'COMPLETED') {
       console.log(`[Purchase] ⏭️ Already completed: ${paymentId}`);
       return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
     }
 
     if (existing.status === 'PENDING' && existing.processedVia === 'API' && source === 'WEBHOOK') {
-      // API is handling it, webhook should back off
       console.log(`[Purchase] ⏭️ API is processing: ${paymentId}, webhook backing off`);
       return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
     }
@@ -234,13 +145,12 @@ async function processPurchase(
           currency,
           productType: type,
           status: 'PENDING',
-          processedVia: source  // Track who's handling it
+          processedVia: source
         }
       });
       console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
     } catch (err: any) {
-      // Race condition - another request got here first
-      if (err.code === 'P2002') { // Prisma unique constraint error
+      if (err.code === 'P2002') {
         console.log(`[Purchase] ⚠️ Lock conflict for ${paymentId}, checking status...`);
         const check = await db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
         return {
@@ -252,7 +162,6 @@ async function processPurchase(
       throw err;
     }
   } else {
-    // Update existing PENDING record to mark who's processing
     await db.transaction.update({
       where: { paymentIntentId: paymentId },
       data: { processedVia: source }
@@ -318,11 +227,9 @@ async function processPurchase(
   };
 }
 
-
 // ==================================================================
-// 1. STRIPE WEBHOOK (BACKUP ONLY)
+// 1. STRIPE WEBHOOK (BACKUP) - Must be BEFORE express.json()
 // ==================================================================
-
 app.post('/api/hooks/stripe',
   express.raw({ type: 'application/json' }),
   async (req: Request, res: Response): Promise<any> => {
@@ -342,6 +249,7 @@ app.post('/api/hooks/stripe',
 
     // Replay protection
     if (processedWebhooks.has(event.id)) {
+      console.log(`[Webhook] ⚠️ Duplicate event ${event.id}, ignoring.`);
       return res.json({ received: true });
     }
     processedWebhooks.add(event.id);
@@ -350,6 +258,7 @@ app.post('/api/hooks/stripe',
     try {
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
+        console.log(`[Webhook] Payment Succeeded: ${paymentIntent.id}`);
 
         // Check if API already handled this
         const existing = await db.transaction.findUnique({
@@ -372,8 +281,8 @@ app.post('/api/hooks/stripe',
         }
 
         // Process as fallback
-        if (!existing) {
-          console.log(`[Webhook] 🔄 API missed this payment, processing: ${paymentIntent.id}`);
+        if (!existing || existing.status === 'PENDING') {
+          console.log(`[Webhook] 🔄 Processing payment: ${paymentIntent.id}`);
           await processPurchase({
             paymentId: paymentIntent.id,
             mobile: paymentIntent.metadata.mobile,
@@ -393,58 +302,48 @@ app.post('/api/hooks/stripe',
   }
 );
 
+// Now parse JSON for all other routes
+app.use(express.json());
 
 // ==================================================================
-// API PURCHASE (PRIMARY)
+// 🚀 CACHE & SCHEDULER
 // ==================================================================
+let COUNTRY_CACHE: any[] = [];
+let OPERATOR_CACHE: any[] = []; 
 
-app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
+const initializeCache = async () => {
+  console.log('[Server] ⏳ Initializing Caches...');
   try {
-    const cleanData = purchaseSchema.parse(req.body);
-    const { productId, mobile, amount, unit, paymentId, type } = cleanData;
-
-    // Verify payment succeeded
-    const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
-    if (paymentIntent.status !== 'succeeded') {
-      console.warn(`[Security] 🚨 Unpaid Intent: ${paymentId}`);
-      return res.status(403).json({ error: 'Payment not completed.' });
+    const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
+    const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
+    
+    if (process.env.SYNC_ON_STARTUP === 'true') {
+      console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
+      syncProducts(); 
+    } else {
+      console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
     }
+    console.log(`[Server] 🚀 System Ready!`);
+  } catch (e) { console.error("Cache init failed", e); }
+};
 
-    // Verify product matches
-    const paidProductId = Number(paymentIntent.metadata?.productId);
-    if (paidProductId && paidProductId !== productId) {
-      console.warn(`[Security] 🚨 Product mismatch: paid=${paidProductId}, requested=${productId}`);
-      return res.status(403).json({ error: 'Product mismatch.' });
-    }
+initializeCache();
 
-    // Process (API is primary)
-    const result = await processPurchase({
-      paymentId,
-      mobile,
-      productId,
-      amount,
-      currency: unit || 'UNKNOWN',
-      type: type || 'UNKNOWN'
-    }, 'API');
-
-    return res.json(result);
-
-  } catch (error: any) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({
-        error: 'Validation Error',
-        details: error.issues.map((e: any) => e.message)
-      });
-    }
-    console.error("Purchase API Error:", error);
-    return res.status(500).json({ success: false, error: 'Internal server error' });
+cron.schedule('0 3 * * *', async () => {
+  console.log('[Scheduler] 🌙 3 AM Sync Starting...');
+  try {
+    const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
+    const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
+    await syncProducts();
+    console.log('[Scheduler] ✅ Daily sync complete.');
+  } catch (err) {
+    console.error('[Scheduler] ❌ Daily sync failed:', err);
   }
 });
 
 // ==================================================================
-// API ROUTES
+// VALIDATION SCHEMAS
 // ==================================================================
-
 const purchaseSchema = z.object({
   productId: z.number().int().positive(), 
   mobile: z.string().min(7).max(15).regex(/^\+?[0-9]+$/, "Invalid mobile format"), 
@@ -453,6 +352,10 @@ const purchaseSchema = z.object({
   paymentId: z.string().startsWith("pi_", "Invalid Payment ID format"),
   type: z.string().optional()
 });
+
+// ==================================================================
+// API ROUTES
+// ==================================================================
 
 app.get('/api/countries', (_req: Request, res: Response): any => res.json(COUNTRY_CACHE));
 
@@ -544,46 +447,55 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
+// ==================================================================
+// API PURCHASE (PRIMARY)
+// ==================================================================
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
   try {
     const cleanData = purchaseSchema.parse(req.body);
     const { productId, mobile, amount, unit, paymentId, type } = cleanData;
 
+    // Verify payment succeeded
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
     if (paymentIntent.status !== 'succeeded') {
-        console.warn(`[Security] 🚨 Blocked attempt to use unpaid Intent: ${paymentId}`);
-        return res.status(403).json({ error: 'Payment not completed or failed.' });
+      console.warn(`[Security] 🚨 Unpaid Intent: ${paymentId}`);
+      return res.status(403).json({ error: 'Payment not completed.' });
     }
 
+    // Verify product matches
     const paidProductId = Number(paymentIntent.metadata?.productId);
     if (paidProductId && paidProductId !== productId) {
-        console.warn(`[Security] 🚨 Product Mismatch! Paid: ${paidProductId}, Requested: ${productId}`);
-        return res.status(403).json({ error: 'Security verification failed: Product mismatch.' });
+      console.warn(`[Security] 🚨 Product mismatch: paid=${paidProductId}, requested=${productId}`);
+      return res.status(403).json({ error: 'Product mismatch.' });
     }
 
+    // Process (API is primary)
     const result = await processPurchase({
-      paymentId, 
-      mobile, 
-      productId, 
-      amount, 
-      currency: unit || 'UNKNOWN', 
+      paymentId,
+      mobile,
+      productId,
+      amount,
+      currency: unit || 'UNKNOWN',
       type: type || 'UNKNOWN'
-    });
+    }, 'API');
 
     return res.json(result);
 
   } catch (error: any) {
     if (error instanceof z.ZodError) {
-        return res.status(400).json({ 
-            error: 'Validation Error', 
-            details: error.issues.map((e: any) => e.message) 
-        });
+      return res.status(400).json({
+        error: 'Validation Error',
+        details: error.issues.map((e: any) => e.message)
+      });
     }
     console.error("Purchase API Error:", error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
+// ==================================================================
+// TRANSACTION STATUS CHECK
+// ==================================================================
 app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Promise<any> => {
   const { paymentId } = req.params;
   try {
@@ -600,10 +512,13 @@ app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Prom
   }
 });
 
+// ==================================================================
+// DTONE WEBHOOK (with IP + Basic Auth)
+// ==================================================================
 app.post('/api/hooks/dtone',
   dtoneIpWhitelist,
   dtoneBasicAuth,
-  async (req: Request, res: Response) => {
+  async (req: Request, res: Response): Promise<any> => {
     const { external_id, status } = req.body;
 
     if (!external_id) {
@@ -619,12 +534,11 @@ app.post('/api/hooks/dtone',
 
       if (!txn) {
         console.warn(`[DTOne Callback] Unknown transaction: ${external_id}`);
-        return res.status(200).send('OK'); // Don't retry
+        return res.status(200).send('OK');
       }
 
       const statusId = status?.class?.id;
 
-      // Status 7 = Success, 3/9 = Failed
       if (statusId === 7) {
         await db.transaction.update({
           where: { id: txn.id },
@@ -633,7 +547,6 @@ app.post('/api/hooks/dtone',
         console.log(`[DTOne Callback] ✅ Transaction ${external_id} completed`);
       }
       else if ([3, 9].includes(statusId)) {
-        // Refund the customer
         if (txn.paymentIntentId && txn.status !== 'REFUNDED') {
           await paymentService.refundPayment(txn.paymentIntentId);
           await db.transaction.update({
@@ -652,6 +565,9 @@ app.post('/api/hooks/dtone',
   }
 );
 
+// ==================================================================
+// STATIC FILES (Frontend)
+// ==================================================================
 const DIST_PATH = path.join(process.cwd(), 'dist');
 app.use(express.static(DIST_PATH));
 app.get(/(.*)/, (_req: Request, res: Response) => res.sendFile(path.join(DIST_PATH, 'index.html')));
