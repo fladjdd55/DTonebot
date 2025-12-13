@@ -1,5 +1,6 @@
 // client/src/components/RechargeFlow.tsx
-// ... (imports remain the same)
+// ✅ IMPROVED VERSION - CLEAN (No duplicates)
+
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { Search, Check, AlertCircle, Phone, Loader2, Wifi, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
@@ -12,11 +13,10 @@ import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValida
 import { filterCountries, type Country } from '../shared/countryValidator'; 
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
+import ConfirmationModal from './ConfirmationModal';
 
-// ✅ Load from ENV, fallback to 5 if missing
 const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_ORDER_USD) || 5;
 
-// Helper to filter out small USD products
 const isProductEligible = (p: Product) => {
   if (p.currency !== 'USD') return true; 
   const price = parseFloat(p.amount.split(' ')[0]);
@@ -41,12 +41,13 @@ export default function RechargeFlow() {
   const [activeTab, setActiveTab] = useState<'AIRTIME' | 'DATA' | 'BUNDLES'>('AIRTIME');
   
   const [showManualSelection, setShowManualSelection] = useState(false);
+  const [operatorSearch, setOperatorSearch] = useState('');
+  
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
+  const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
-  const [isPurchasing, setIsPurchasing] = useState(false);
   const [isProcessingTransaction, setIsProcessingTransaction] = useState(false);
 
-  // FILTERS
   const [currency, setCurrency] = useState(''); 
   const [priceFilter, setPriceFilter] = useState<number | 'ALL'>('ALL'); 
 
@@ -55,21 +56,18 @@ export default function RechargeFlow() {
   
   const { operators: availableOperators, usingFallback: operatorsFallback } = useOperators(selectedCountry?.iso3);
 
-  // Fetch All Products
   const { products: allProducts, loading: productsLoading } = useProducts(
     operator?.operatorId, 
     '', 
     undefined 
   );
 
-  // Dynamic Currencies
   const availableCurrencies = useMemo(() => {
     if (!allProducts.length) return [];
     const currencies = new Set(allProducts.map(p => p.currency));
     return Array.from(currencies).sort(); 
   }, [allProducts]);
 
-  // SMART AUTO-SELECT CURRENCY
   useEffect(() => {
     if (availableCurrencies.length > 0) {
       if (!currency || !availableCurrencies.includes(currency)) {
@@ -82,29 +80,20 @@ export default function RechargeFlow() {
     }
   }, [availableCurrencies, currency]);
 
-  // FILTER LOGIC
   const filteredProducts = useMemo(() => {
     let list = allProducts;
-
     list = list.filter(p => !p.type.includes('RANGED'));
-
-    if (currency) {
-      list = list.filter(p => p.currency === currency);
-    }
-
+    if (currency) list = list.filter(p => p.currency === currency);
     list = list.filter(isProductEligible);
-
     if (priceFilter !== 'ALL') {
       list = list.filter(p => {
         const price = parseFloat(p.amount.split(' ')[0]);
         return Math.abs(price - priceFilter) <= 1.5; 
       });
     }
-
     return list;
   }, [allProducts, currency, priceFilter]);
 
-  // Categorize for Tabs
   const categorizedProducts = useMemo(() => {
     return {
       AIRTIME: filteredProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
@@ -113,7 +102,6 @@ export default function RechargeFlow() {
     };
   }, [filteredProducts]);
 
-  // Dynamic Tabs
   const visibleTabs = useMemo(() => {
     const tabs: ('AIRTIME' | 'DATA' | 'BUNDLES')[] = [];
     if (categorizedProducts.AIRTIME.length > 0) tabs.push('AIRTIME');
@@ -131,6 +119,13 @@ export default function RechargeFlow() {
   const filteredCountries = useMemo(() => {
     return filterCountries(countries || [], searchQuery || '');
   }, [searchQuery, countries]);
+
+  const filteredOperators = useMemo(() => {
+    if (!operatorSearch) return availableOperators;
+    return availableOperators.filter(op =>
+      op.name.toLowerCase().includes(operatorSearch.toLowerCase())
+    );
+  }, [availableOperators, operatorSearch]);
 
   const operatorCountryName = useMemo(() => {
     if (!operator || !countries.length) return operator?.countryIso || 'Unknown';
@@ -220,26 +215,25 @@ export default function RechargeFlow() {
   };
 
   const handlePurchase = async (product: Product) => {
-    if (isPurchasing) return;
-    setIsPurchasing(true);
-
     const priceString = product.amount.split(' ')[0]; 
     const finalAmount = parseFloat(priceString);
 
     const effectiveMin = product.currency === 'USD' ? Math.max(product.min, MIN_USD_AMOUNT) : product.min;
     if (finalAmount < effectiveMin) {
         setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
-        setIsPurchasing(false);
         return;
     }
 
     setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
-    setApiError(''); // Clear errors
-    setIsPayModalOpen(true);
-    setIsPurchasing(false); 
+    setIsConfirmModalOpen(true);
   };
 
-  // ✅ UPDATED: Polling Transaction Handler
+  const handleConfirmPurchase = () => {
+    setIsConfirmModalOpen(false);
+    setApiError('');
+    setIsPayModalOpen(true);
+  };
+
   const executeTransaction = async (paymentId: string) => {
     if (!pendingTxn) return;
     
@@ -247,7 +241,6 @@ export default function RechargeFlow() {
     setApiError('');
 
     try {
-      // 1. Initial Purchase Request
       let result = await rechargeApi.purchase(
         pendingTxn.product.id,       
         pendingTxn.mobile,           
@@ -257,13 +250,11 @@ export default function RechargeFlow() {
         paymentId                    
       );
 
-      // 2. Race Condition Handling: If PENDING, Poll for updates
       if (result.success && result.dbStatus === 'PENDING') {
-         const MAX_RETRIES = 15; // 30 seconds max
+         const MAX_RETRIES = 15;
          let retries = 0;
          
          while (retries < MAX_RETRIES) {
-            // Wait 2 seconds
             await new Promise(resolve => setTimeout(resolve, 2000));
             
             try {
@@ -284,7 +275,6 @@ export default function RechargeFlow() {
          }
       }
 
-      // 3. Final Check
       if (!result.success || result.dbStatus === 'FAILED' || result.dbStatus === 'REFUNDED') {
         const errorMsg = result.refunded 
           ? `Transaction failed. Your payment has been refunded automatically.`
@@ -295,7 +285,6 @@ export default function RechargeFlow() {
         return; 
       }
 
-      // 4. Success
       setTxnResult(result);
       setIsProcessingTransaction(false);
       setPendingTxn(null); 
@@ -318,6 +307,11 @@ export default function RechargeFlow() {
     setApiError('');
     setPendingTxn(null);
     setIsProcessingTransaction(false);
+  };
+
+  const handleCloseConfirmation = () => {
+    setIsConfirmModalOpen(false);
+    setPendingTxn(null);
   };
 
   const resetFlow = () => {
@@ -359,7 +353,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* STEP 1: COUNTRY & PHONE */}
           {step === 1 && (
             <div className="space-y-6">
               <div className="relative" ref={dropdownRef}>
@@ -437,11 +430,22 @@ export default function RechargeFlow() {
               {showManualSelection && selectedCountry && (
                 <div className="mt-4">
                   <p className="text-sm font-bold text-gray-700 mb-2">Select Operator:</p>
+                  
+                  <input
+                    type="text"
+                    placeholder="Search operators (e.g., MTN, Airtel)..."
+                    value={operatorSearch}
+                    onChange={(e) => setOperatorSearch(e.target.value)}
+                    className="w-full mb-3 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
+                  />
+                  
                   <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto">
-                    {availableOperators.length === 0 ? (
-                       <div className="col-span-2 text-center text-sm text-gray-400 py-4">No operators found for this country.</div>
+                    {filteredOperators.length === 0 ? (
+                       <div className="col-span-2 text-center text-sm text-gray-400 py-4">
+                         {operatorSearch ? 'No operators found matching your search' : 'No operators found for this country.'}
+                       </div>
                     ) : (
-                      availableOperators.map((op) => (
+                      filteredOperators.map((op) => (
                         <button
                           key={op.id}
                           onClick={() => handleManualSelect(op)}
@@ -465,7 +469,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* STEP 1.5: CONFIRM OPERATOR */}
           {step === 1.5 && operator && (
             <div className="space-y-6 text-center">
               <div className="bg-indigo-50 p-6 rounded-xl border-2 border-indigo-100">
@@ -479,7 +482,11 @@ export default function RechargeFlow() {
                       onError={() => setLogoError(true)}
                     />
                   ) : (
-                    <Wifi className="w-12 h-12 text-indigo-600 mb-2" />
+                    <div className="w-16 h-16 bg-indigo-600 rounded-full flex items-center justify-center mb-2">
+                      <span className="text-white font-bold text-2xl">
+                        {operator.operatorName.charAt(0)}
+                      </span>
+                    </div>
                   )}
                   <div className="text-2xl font-bold text-gray-900">{operator.operatorName}</div>
                 </div>
@@ -500,7 +507,6 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* STEP 2: SELECT PRODUCT */}
           {step === 2 && operator && (
             <div className="space-y-4">
               <div className="flex items-center justify-between border-b pb-4">
@@ -513,14 +519,17 @@ export default function RechargeFlow() {
                       onError={() => setLogoError(true)}
                     />
                   ) : (
-                    <Wifi className="w-5 h-5 text-indigo-600" />
+                    <div className="w-6 h-6 bg-indigo-600 rounded-full flex items-center justify-center">
+                      <span className="text-white font-bold text-xs">
+                        {operator.operatorName.charAt(0)}
+                      </span>
+                    </div>
                   )}
                   <span className="font-bold text-gray-900">{operator.operatorName}</span>
                 </div>
                 <button onClick={resetFlow} className="text-sm text-blue-600 underline">Change</button>
               </div>
 
-              {/* QUICK PRICE FILTERS */}
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 <button 
                   onClick={() => setPriceFilter('ALL')} 
@@ -539,7 +548,6 @@ export default function RechargeFlow() {
                 ))}
               </div>
 
-              {/* CURRENCY DROPDOWN */}
               <div className="flex gap-2 mb-2">
                 <select 
                   value={currency} 
@@ -554,21 +562,23 @@ export default function RechargeFlow() {
                 </select>
               </div>
 
-              {/* CATEGORY TABS (Hidden if empty) */}
               {visibleTabs.length > 0 && (
                 <div className="flex bg-gray-100 p-1 rounded-lg">
                   {visibleTabs.map(tab => (
                     <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
-                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-all ${
+                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-1 ${
                         activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
-                      {tab === 'AIRTIME' && <Smartphone className="w-4 h-4 inline mr-1 mb-0.5" />}
-                      {tab === 'DATA' && <Globe className="w-4 h-4 inline mr-1 mb-0.5" />}
-                      {tab === 'BUNDLES' && <Package className="w-4 h-4 inline mr-1 mb-0.5" />}
-                      {tab.charAt(0) + tab.slice(1).toLowerCase()}
+                      {tab === 'AIRTIME' && <Smartphone className="w-4 h-4" />}
+                      {tab === 'DATA' && <Globe className="w-4 h-4" />}
+                      {tab === 'BUNDLES' && <Package className="w-4 h-4" />}
+                      <span>{tab.charAt(0) + tab.slice(1).toLowerCase()}</span>
+                      <span className="ml-1 text-xs bg-white/30 px-1.5 py-0.5 rounded">
+                        {categorizedProducts[tab].length}
+                      </span>
                     </button>
                   ))}
                 </div>
@@ -583,26 +593,40 @@ export default function RechargeFlow() {
                 <>
                 {activeTab === 'AIRTIME' && (
                   <div className="space-y-2">
-                    <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
-                      {categorizedProducts.AIRTIME.map(p => (
-                        <button 
-                          key={p.id} 
-                          onClick={() => handlePurchase(p)} 
-                          className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
-                        >
-                          <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
-                            {p.amount.split(' ')[0]}
-                          </span>
-                          <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
-                            {p.currency}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-
-                    {categorizedProducts.AIRTIME.length === 0 && (
-                      <div className="text-center py-10 text-gray-400">
-                        {priceFilter !== 'ALL' ? `No fixed plans found for ~$${priceFilter}.` : 'No airtime plans available.'}
+                    {categorizedProducts.AIRTIME.length > 0 ? (
+                      <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
+                        {categorizedProducts.AIRTIME.map(p => (
+                          <button 
+                            key={p.id} 
+                            onClick={() => handlePurchase(p)} 
+                            className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
+                          >
+                            <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
+                              {p.amount.split(' ')[0]}
+                            </span>
+                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
+                              {p.currency}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-center py-10">
+                        <Smartphone className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                        <p className="text-gray-600 font-medium mb-2">No airtime plans found</p>
+                        <p className="text-sm text-gray-500 mb-4">
+                          {priceFilter !== 'ALL' 
+                            ? `No plans available for ~$${priceFilter}` 
+                            : 'Try selecting a different currency or removing filters'}
+                        </p>
+                        {(priceFilter !== 'ALL' || currency) && (
+                          <button 
+                            onClick={() => { setCurrency(''); setPriceFilter('ALL'); }}
+                            className="text-indigo-600 hover:underline font-medium text-sm"
+                          >
+                            Clear all filters
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>
@@ -611,9 +635,26 @@ export default function RechargeFlow() {
                 {(activeTab === 'DATA' || activeTab === 'BUNDLES') && (
                   <div className="space-y-2 max-h-[300px] overflow-y-auto">
                     {categorizedProducts[activeTab].length === 0 ? (
-                      <div className="text-center py-10 text-gray-400">
-                        <Package className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                        No plans found.
+                      <div className="text-center py-10">
+                        {activeTab === 'DATA' ? (
+                          <Globe className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                        ) : (
+                          <Package className="w-12 h-12 mx-auto mb-3 text-gray-300" />
+                        )}
+                        <p className="text-gray-600 font-medium mb-2">
+                          No {activeTab.toLowerCase()} plans found
+                        </p>
+                        <p className="text-sm text-gray-500 mb-4">
+                          This operator might not offer {activeTab.toLowerCase()} plans, or they're filtered out
+                        </p>
+                        {(priceFilter !== 'ALL' || currency) && (
+                          <button 
+                            onClick={() => { setCurrency(''); setPriceFilter('ALL'); }}
+                            className="text-indigo-600 hover:underline font-medium text-sm"
+                          >
+                            Clear all filters
+                          </button>
+                        )}
                       </div>
                     ) : (
                       categorizedProducts[activeTab].map(p => (
@@ -656,6 +697,17 @@ export default function RechargeFlow() {
                 Send Another
               </button>
             </div>
+          )}
+
+          {pendingTxn && (
+            <ConfirmationModal
+              isOpen={isConfirmModalOpen}
+              onClose={handleCloseConfirmation}
+              onConfirm={handleConfirmPurchase}
+              product={pendingTxn.product}
+              mobile={pendingTxn.mobile}
+              operatorName={operator?.operatorName || ''}
+            />
           )}
 
           {pendingTxn && isPayModalOpen && (

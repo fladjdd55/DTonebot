@@ -1,4 +1,5 @@
 "use strict";
+// server/payment.ts
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -9,8 +10,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
     function verb(n) { return function (v) { return step([n, v]); }; }
     function step(op) {
         if (f) throw new TypeError("Generator is already executing.");
@@ -42,6 +43,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.paymentService = void 0;
 var stripe_1 = __importDefault(require("stripe"));
 var dotenv_1 = __importDefault(require("dotenv"));
+var axios_1 = __importDefault(require("axios"));
 dotenv_1.default.config();
 if (!process.env.STRIPE_SECRET_KEY) {
     console.warn("⚠️  STRIPE_SECRET_KEY is missing in .env");
@@ -49,11 +51,40 @@ if (!process.env.STRIPE_SECRET_KEY) {
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
     apiVersion: '2023-10-16',
 });
+// ✅ NEW: Simple Notification Helper (Discord/Slack)
+function sendAdminAlert(message) {
+    return __awaiter(this, void 0, void 0, function () {
+        var webhookUrl, err_1;
+        return __generator(this, function (_a) {
+            switch (_a.label) {
+                case 0:
+                    webhookUrl = process.env.ADMIN_WEBHOOK_URL;
+                    if (!webhookUrl) {
+                        console.error("[Alert] \uD83D\uDEA8 (Webhook not configured): ".concat(message));
+                        return [2 /*return*/];
+                    }
+                    _a.label = 1;
+                case 1:
+                    _a.trys.push([1, 3, , 4]);
+                    return [4 /*yield*/, axios_1.default.post(webhookUrl, { content: "\uD83D\uDEA8 **Critical Payment Error:** ".concat(message) })];
+                case 2:
+                    _a.sent();
+                    return [3 /*break*/, 4];
+                case 3:
+                    err_1 = _a.sent();
+                    console.error('[Alert] Failed to send webhook:', err_1);
+                    return [3 /*break*/, 4];
+                case 4: return [2 /*return*/];
+            }
+        });
+    });
+}
 exports.paymentService = {
     /**
      * Creates a Payment Intent and returns ID + Secret
      */
-    createPaymentIntent: function (amount, currency, metadata) {
+    createPaymentIntent: function (amount, currency, metadata, idempotencyKey // 👈 Accepted here
+    ) {
         return __awaiter(this, void 0, void 0, function () {
             var amountInCents, paymentIntent, error_1;
             var _a;
@@ -71,12 +102,14 @@ exports.paymentService = {
                                     productId: ((_a = metadata === null || metadata === void 0 ? void 0 : metadata.productId) === null || _a === void 0 ? void 0 : _a.toString()) || '',
                                     type: (metadata === null || metadata === void 0 ? void 0 : metadata.type) || ''
                                 }
+                            }, {
+                                idempotencyKey: idempotencyKey // 👈 Passed to Stripe
                             })];
                     case 1:
                         paymentIntent = _b.sent();
                         return [2 /*return*/, {
                                 clientSecret: paymentIntent.client_secret,
-                                id: paymentIntent.id // 👈 Sending ID to frontend
+                                id: paymentIntent.id
                             }];
                     case 2:
                         error_1 = _b.sent();
@@ -92,11 +125,11 @@ exports.paymentService = {
      */
     refundPayment: function (paymentIntentId) {
         return __awaiter(this, void 0, void 0, function () {
-            var refund, error_2;
+            var refund, error_2, errorMsg;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        _a.trys.push([0, 2, , 3]);
+                        _a.trys.push([0, 2, , 4]);
                         console.log("[Stripe] \uD83D\uDCB8 Attempting refund for ".concat(paymentIntentId, "..."));
                         return [4 /*yield*/, stripe.refunds.create({
                                 payment_intent: paymentIntentId,
@@ -107,9 +140,15 @@ exports.paymentService = {
                         return [2 /*return*/, refund];
                     case 2:
                         error_2 = _a.sent();
-                        console.error('[Stripe] ❌ Refund Failed:', error_2.message);
+                        errorMsg = "Refund FAILED for Payment ".concat(paymentIntentId, ". Reason: ").concat(error_2.message);
+                        console.error("[Stripe] \u274C ".concat(errorMsg));
+                        // Notify Admin immediately so they can fix it manually
+                        return [4 /*yield*/, sendAdminAlert(errorMsg)];
+                    case 3:
+                        // Notify Admin immediately so they can fix it manually
+                        _a.sent();
                         return [2 /*return*/, null];
-                    case 3: return [2 /*return*/];
+                    case 4: return [2 /*return*/];
                 }
             });
         });

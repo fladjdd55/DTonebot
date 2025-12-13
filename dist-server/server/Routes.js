@@ -21,8 +21,8 @@ var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, ge
     });
 };
 var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
-    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
+    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
     function verb(n) { return function (v) { return step([n, v]); }; }
     function step(op) {
         if (f) throw new TypeError("Generator is already executing.");
@@ -50,12 +50,16 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
+var _a;
 Object.defineProperty(exports, "__esModule", { value: true });
 var express_1 = __importDefault(require("express"));
 var cors_1 = __importDefault(require("cors"));
 var path_1 = __importDefault(require("path"));
 var stripe_1 = __importDefault(require("stripe"));
 var node_cron_1 = __importDefault(require("node-cron"));
+var express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+var helmet_1 = __importDefault(require("helmet"));
+var zod_1 = require("zod");
 var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
@@ -63,13 +67,76 @@ var sync_products_1 = require("./scripts/sync-products");
 var payment_1 = require("./payment");
 var db_1 = require("./db");
 var app = (0, express_1.default)();
+// Trust Proxy (Fixes the rate-limit error)
+app.set('trust proxy', 1);
 var PORT = process.env.PORT || 5000;
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
-app.use((0, cors_1.default)());
 // ==================================================================
-// 1. STRIPE WEBHOOK (Must be BEFORE express.json)
+// 🔒 SECURITY CONFIGURATION (Adjusted)
 // ==================================================================
-// ✅ FIX: Use express.raw() to verify Stripe signatures correctly
+// 1. Helmet - Content Security Policy
+app.use((0, helmet_1.default)({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for React
+            scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
+            frameSrc: ["https://js.stripe.com"],
+            connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"], // Allow WebSocket for Dev
+            // ✅ FIX: Allow images from data URIs (flags) and HTTPS (operator logos)
+            imgSrc: ["'self'", "data:", "https:"]
+        }
+    }
+}));
+// 2. Determine Allowed Origins
+var allowedOrigins = process.env.NODE_ENV === 'production'
+    ? (((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',').map(function (o) { return o.trim(); })) || [])
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+// 3. Helper to validate Origin
+var isValidOrigin = function (origin) {
+    try {
+        var url = new URL(origin);
+        if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') {
+            return false;
+        }
+        return allowedOrigins.includes(origin);
+    }
+    catch (error) {
+        return false;
+    }
+};
+// 4. Strict CORS Middleware
+app.use((0, cors_1.default)({
+    origin: function (origin, callback) {
+        if (!origin)
+            return callback(null, true);
+        if (isValidOrigin(origin))
+            return callback(null, true);
+        console.warn("\uD83D\uDEAB CORS Blocked: ".concat(origin));
+        callback(new Error("CORS policy: Origin ".concat(origin, " is not allowed")));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'stripe-signature', 'idempotency-key'],
+    exposedHeaders: ['Content-Length', 'X-Request-Id'],
+    maxAge: 86400
+}));
+console.log("\uD83D\uDD12 CORS Configured. Environment: ".concat(process.env.NODE_ENV));
+// 5. Rate Limiter
+var apiLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    validate: { xForwardedForHeader: false },
+    message: { error: "Too many requests, please try again later." }
+});
+app.use('/api/', apiLimiter);
+// ✅ SECURITY: Webhook Replay Protection Set
+var processedWebhooks = new Set();
+// ==================================================================
+// 1. STRIPE WEBHOOK
+// ==================================================================
 app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }), function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var sig, webhookSecret, event, paymentIntent, error_1;
     return __generator(this, function (_a) {
@@ -88,13 +155,18 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                     console.error("Webhook Signature Error: ".concat(err.message));
                     return [2 /*return*/, res.status(400).send("Webhook Error: ".concat(err.message))];
                 }
+                if (processedWebhooks.has(event.id)) {
+                    console.log("[Webhook] \u26A0\uFE0F Duplicate event ".concat(event.id, ", ignoring."));
+                    return [2 /*return*/, res.json({ received: true })];
+                }
+                processedWebhooks.add(event.id);
+                setTimeout(function () { return processedWebhooks.delete(event.id); }, 24 * 60 * 60 * 1000);
                 _a.label = 1;
             case 1:
                 _a.trys.push([1, 4, , 5]);
                 if (!(event.type === 'payment_intent.succeeded')) return [3 /*break*/, 3];
                 paymentIntent = event.data.object;
                 console.log("[Webhook] Payment Succeeded: ".concat(paymentIntent.id));
-                // ✅ Uses unified race-proof logic
                 return [4 /*yield*/, processPurchase({
                         paymentId: paymentIntent.id,
                         mobile: paymentIntent.metadata.mobile,
@@ -104,7 +176,6 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                         type: paymentIntent.metadata.type || 'UNKNOWN'
                     })];
             case 2:
-                // ✅ Uses unified race-proof logic
                 _a.sent();
                 _a.label = 3;
             case 3:
@@ -119,14 +190,12 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
         }
     });
 }); });
-// ✅ GLOBAL PARSER: Now we can use JSON for everything else
 app.use(express_1.default.json());
 // ==================================================================
-// 🚀 CACHE & SCHEDULER (Full Logic)
+// 🚀 CACHE & SCHEDULER
 // ==================================================================
 var COUNTRY_CACHE = [];
 var OPERATOR_CACHE = [];
-// 1. Initial Load (On Server Start)
 var initializeCache = function () { return __awaiter(void 0, void 0, void 0, function () {
     var c, o, e_1;
     return __generator(this, function (_a) {
@@ -146,10 +215,9 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
                 o = _a.sent();
                 if (o)
                     OPERATOR_CACHE = o;
-                // ✅ CONTROLLED SYNC: Only run if .env says so
                 if (process.env.SYNC_ON_STARTUP === 'true') {
                     console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
-                    (0, sync_products_1.syncProducts)(); // Run in background (don't await)
+                    (0, sync_products_1.syncProducts)();
                 }
                 else {
                     console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
@@ -164,9 +232,7 @@ var initializeCache = function () { return __awaiter(void 0, void 0, void 0, fun
         }
     });
 }); };
-// Run immediately on start
 initializeCache();
-// 2. Cron Schedule (Runs daily at 03:00 AM)
 node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0, void 0, void 0, function () {
     var c, o, err_1;
     return __generator(this, function (_a) {
@@ -200,7 +266,7 @@ node_cron_1.default.schedule('0 3 * * *', function () { return __awaiter(void 0,
     });
 }); });
 // ==================================================================
-// 🧩 UNIFIED PURCHASE LOGIC (Race-Condition Proof)
+// 🧩 UNIFIED PURCHASE LOGIC
 // ==================================================================
 function processPurchase(data) {
     return __awaiter(this, void 0, void 0, function () {
@@ -214,7 +280,7 @@ function processPurchase(data) {
                     _a.trys.push([1, 3, , 5]);
                     return [4 /*yield*/, db_1.db.transaction.create({
                             data: {
-                                externalId: "pending_".concat(paymentId), // Temporary ID
+                                externalId: "pending_".concat(paymentId),
                                 paymentIntentId: paymentId,
                                 paymentId: paymentId,
                                 mobile: mobile,
@@ -222,7 +288,7 @@ function processPurchase(data) {
                                 amount: amount,
                                 currency: currency,
                                 productType: type,
-                                status: 'PENDING' // ⏳ Lock status
+                                status: 'PENDING'
                             }
                         })];
                 case 2:
@@ -230,15 +296,13 @@ function processPurchase(data) {
                     return [3 /*break*/, 5];
                 case 3:
                     err_2 = _a.sent();
-                    // 🛑 If UNIQUE constraint fails, it means another process (Webhook or API) won the race
-                    console.log("[Purchase] Lock failed for ".concat(paymentId, " (Duplicate Request). Skipping."));
+                    console.log("[Purchase] Lock failed for ".concat(paymentId, " (Duplicate Request)."));
                     return [4 /*yield*/, db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } })];
                 case 4:
                     existing = _a.sent();
                     isSuccess = (existing === null || existing === void 0 ? void 0 : existing.status) === 'COMPLETED' || (existing === null || existing === void 0 ? void 0 : existing.status) === 'PENDING';
                     return [2 /*return*/, __assign(__assign({ success: isSuccess }, existing), { dbStatus: existing === null || existing === void 0 ? void 0 : existing.status })];
                 case 5:
-                    // 2. 🚀 EXECUTE: We won the lock, so WE call DTOne
                     console.log("[Purchase] Lock Acquired. Processing order for ".concat(paymentId, "..."));
                     callbackUrl = process.env.DTONE_CALLBACK_URL ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/hooks/dtone") : undefined;
                     return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, amount, currency, type, callbackUrl)];
@@ -260,13 +324,11 @@ function processPurchase(data) {
                     statusId = result.data.statusId;
                     dbStatus = 'PENDING';
                     if (!(statusId === 7)) return [3 /*break*/, 10];
-                    // ✅ CASE 1: SUCCESS
                     dbStatus = 'COMPLETED';
                     console.log("[Purchase] \u2705 Success! Top-up sent. DTOne Ref: ".concat(result.data.externalId));
                     return [3 /*break*/, 13];
                 case 10:
                     if (![3, 9].includes(statusId || 0)) return [3 /*break*/, 12];
-                    // ❌ CASE 2: HARD FAILURE (Rejected/Declined)
                     console.warn("[Purchase] \u26A0\uFE0F Transaction Declined (Status ".concat(statusId, "). Refund initiated..."));
                     return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
                 case 11:
@@ -274,20 +336,13 @@ function processPurchase(data) {
                     dbStatus = 'FAILED';
                     return [3 /*break*/, 13];
                 case 12:
-                    // ⏳ CASE 3: PENDING/OTHER
                     console.log("[Purchase] \u23F3 Transaction Submitted (Status ".concat(statusId, "). Waiting for callback."));
                     _a.label = 13;
-                case 13: 
-                // Update Database with Final Status
-                return [4 /*yield*/, db_1.db.transaction.update({
+                case 13: return [4 /*yield*/, db_1.db.transaction.update({
                         where: { paymentIntentId: paymentId },
-                        data: {
-                            status: dbStatus,
-                            externalId: result.data.externalId
-                        }
+                        data: { status: dbStatus, externalId: result.data.externalId }
                     })];
                 case 14:
-                    // Update Database with Final Status
                     _a.sent();
                     return [2 /*return*/, __assign(__assign({ success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING' }, result.data), { dbStatus: dbStatus, refunded: dbStatus === 'FAILED' })];
             }
@@ -297,6 +352,14 @@ function processPurchase(data) {
 // ==================================================================
 // API ROUTES
 // ==================================================================
+var purchaseSchema = zod_1.z.object({
+    productId: zod_1.z.number().int().positive(),
+    mobile: zod_1.z.string().min(7).max(15).regex(/^\+?[0-9]+$/, "Invalid mobile format"),
+    amount: zod_1.z.number().positive(),
+    unit: zod_1.z.string().length(3).optional(),
+    paymentId: zod_1.z.string().startsWith("pi_", "Invalid Payment ID format"),
+    type: zod_1.z.string().optional()
+});
 app.get('/api/countries', function (_req, res) { return res.json(COUNTRY_CACHE); });
 app.get('/api/operators', function (req, res) {
     var country = req.query.country;
@@ -340,7 +403,6 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
                     }); });
                     return [2 /*return*/, res.json(mapped)];
                 }
-                // 3. Fallback: Live API
                 console.log("[Cache Miss] Fetching live products for Op ".concat(opId));
                 return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(opId, 1, 100, 'en')];
             case 2:
@@ -363,21 +425,18 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
     });
 }); });
 app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, amount, currency, mobile, productId, type, result, error_3;
+    var _a, amount, currency, mobile, productId, type, idempotencyKey, result, error_3;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
                 _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
+                idempotencyKey = req.headers['idempotency-key'];
                 if (!amount || !currency)
                     return [2 /*return*/, res.status(400).json({ error: 'Amount and currency are required' })];
                 _b.label = 1;
             case 1:
                 _b.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency, {
-                        mobile: mobile,
-                        productId: productId,
-                        type: type
-                    })];
+                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency, { mobile: mobile, productId: productId, type: type }, idempotencyKey)];
             case 2:
                 result = _b.sent();
                 res.json(result);
@@ -414,23 +473,32 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
         }
     });
 }); });
-// ✅ UPDATED PURCHASE ROUTE
 app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, result, error_5;
+    var cleanData, productId, mobile, amount, unit, paymentId, type, paymentIntent, paidProductId, result, error_5;
+    var _a;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
-                _a = req.body, productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId, type = _a.type;
-                if (!productId || !mobile || !paymentId)
-                    return [2 /*return*/, res.status(400).json({ error: 'Missing required fields' })];
-                _b.label = 1;
+                _b.trys.push([0, 3, , 4]);
+                cleanData = purchaseSchema.parse(req.body);
+                productId = cleanData.productId, mobile = cleanData.mobile, amount = cleanData.amount, unit = cleanData.unit, paymentId = cleanData.paymentId, type = cleanData.type;
+                return [4 /*yield*/, stripe.paymentIntents.retrieve(paymentId)];
             case 1:
-                _b.trys.push([1, 3, , 4]);
+                paymentIntent = _b.sent();
+                if (paymentIntent.status !== 'succeeded') {
+                    console.warn("[Security] \uD83D\uDEA8 Blocked attempt to use unpaid Intent: ".concat(paymentId));
+                    return [2 /*return*/, res.status(403).json({ error: 'Payment not completed or failed.' })];
+                }
+                paidProductId = Number((_a = paymentIntent.metadata) === null || _a === void 0 ? void 0 : _a.productId);
+                if (paidProductId && paidProductId !== productId) {
+                    console.warn("[Security] \uD83D\uDEA8 Product Mismatch! Paid: ".concat(paidProductId, ", Requested: ").concat(productId));
+                    return [2 /*return*/, res.status(403).json({ error: 'Security verification failed: Product mismatch.' })];
+                }
                 return [4 /*yield*/, processPurchase({
                         paymentId: paymentId,
                         mobile: mobile,
-                        productId: Number(productId),
-                        amount: Number(amount || 0),
+                        productId: productId,
+                        amount: amount,
                         currency: unit || 'UNKNOWN',
                         type: type || 'UNKNOWN'
                     })];
@@ -439,13 +507,18 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                 return [2 /*return*/, res.json(result)];
             case 3:
                 error_5 = _b.sent();
+                if (error_5 instanceof zod_1.z.ZodError) {
+                    return [2 /*return*/, res.status(400).json({
+                            error: 'Validation Error',
+                            details: error_5.issues.map(function (e) { return e.message; })
+                        })];
+                }
                 console.error("Purchase API Error:", error_5);
                 return [2 /*return*/, res.status(500).json({ success: false, error: 'Internal server error' })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
-// ✅ NEW STATUS CHECK ROUTE
 app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     var paymentId, txn, error_6;
     return __generator(this, function (_a) {
@@ -460,13 +533,9 @@ app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(vo
                     })];
             case 2:
                 txn = _a.sent();
-                if (!txn) {
-                    return [2 /*return*/, res.status(404).json({ error: 'Transaction not found' })];
-                }
-                return [2 /*return*/, res.json({
-                        status: txn.status,
-                        externalId: txn.externalId
-                    })];
+                if (!txn)
+                    return [2 /*return*/, res.json({ status: 'PENDING' })];
+                return [2 /*return*/, res.json({ status: txn.status, externalId: txn.externalId })];
             case 3:
                 error_6 = _a.sent();
                 console.error("Status Check Error:", error_6);
@@ -475,7 +544,6 @@ app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(vo
         }
     });
 }); });
-// Callback Route
 app.post('/api/hooks/dtone', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
     return __generator(this, function (_a) {
         console.log('[DTOne Callback]', req.body);

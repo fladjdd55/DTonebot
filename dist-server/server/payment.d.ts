@@ -7,7 +7,7 @@ export declare const paymentService: {
         mobile: string;
         productId: number;
         type: string;
-    }): Promise<{
+    }, idempotencyKey?: string): Promise<{
         clientSecret: string | null;
         id: string;
     }>;

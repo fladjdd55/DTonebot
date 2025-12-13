@@ -5,6 +5,9 @@ import cors from 'cors';
 import path from 'path'; 
 import Stripe from 'stripe'; 
 import cron from 'node-cron';
+import rateLimit from 'express-rate-limit'; 
+import helmet from 'helmet'; 
+import { z } from 'zod';
 import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 
@@ -13,15 +16,85 @@ import { paymentService } from './payment';
 import { db } from './db'; 
 
 const app = express();
+
+// Trust Proxy (Fixes the rate-limit error)
+app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 5000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
 
-app.use(cors());
+// ==================================================================
+// 🔒 SECURITY CONFIGURATION (Adjusted)
+// ==================================================================
+
+// 1. Helmet - Content Security Policy
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Allow inline styles for React
+      scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"], 
+      frameSrc: ["https://js.stripe.com"],
+      connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"], // Allow WebSocket for Dev
+      // ✅ FIX: Allow images from data URIs (flags) and HTTPS (operator logos)
+      imgSrc: ["'self'", "data:", "https:"] 
+    }
+  }
+}));
+
+// 2. Determine Allowed Origins
+const allowedOrigins = process.env.NODE_ENV === 'production'
+  ? (process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [])
+  : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+
+// 3. Helper to validate Origin
+const isValidOrigin = (origin: string): boolean => {
+  try {
+    const url = new URL(origin);
+    if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') {
+      return false;
+    }
+    return allowedOrigins.includes(origin);
+  } catch (error) {
+    return false;
+  }
+};
+
+// 4. Strict CORS Middleware
+app.use(cors({
+  origin: (origin, callback) => {
+    if (!origin) return callback(null, true);
+    if (isValidOrigin(origin)) return callback(null, true);
+    console.warn(`🚫 CORS Blocked: ${origin}`);
+    callback(new Error(`CORS policy: Origin ${origin} is not allowed`));
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'stripe-signature', 'idempotency-key'],
+  exposedHeaders: ['Content-Length', 'X-Request-Id'],
+  maxAge: 86400 
+}));
+
+console.log(`🔒 CORS Configured. Environment: ${process.env.NODE_ENV}`);
+
+// 5. Rate Limiter
+const apiLimiter = rateLimit({
+	windowMs: 15 * 60 * 1000, 
+	max: 100,
+	standardHeaders: true, 
+	legacyHeaders: false, 
+    validate: { xForwardedForHeader: false }, 
+    message: { error: "Too many requests, please try again later." }
+});
+
+app.use('/api/', apiLimiter); 
+
+// ✅ SECURITY: Webhook Replay Protection Set
+const processedWebhooks = new Set<string>();
 
 // ==================================================================
-// 1. STRIPE WEBHOOK (Must be BEFORE express.json)
+// 1. STRIPE WEBHOOK
 // ==================================================================
-// ✅ FIX: Use express.raw() to verify Stripe signatures correctly
 app.post('/api/hooks/stripe', express.raw({ type: 'application/json' }), async (req: Request, res: Response): Promise<any> => {
     const sig = req.headers['stripe-signature'];
     const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -37,12 +110,18 @@ app.post('/api/hooks/stripe', express.raw({ type: 'application/json' }), async (
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
+    if (processedWebhooks.has(event.id)) {
+      console.log(`[Webhook] ⚠️ Duplicate event ${event.id}, ignoring.`);
+      return res.json({ received: true });
+    }
+    processedWebhooks.add(event.id);
+    setTimeout(() => processedWebhooks.delete(event.id), 24 * 60 * 60 * 1000);
+
     try {
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         console.log(`[Webhook] Payment Succeeded: ${paymentIntent.id}`);
         
-        // ✅ Uses unified race-proof logic
         await processPurchase({
           paymentId: paymentIntent.id,
           mobile: paymentIntent.metadata.mobile,
@@ -59,39 +138,32 @@ app.post('/api/hooks/stripe', express.raw({ type: 'application/json' }), async (
     }
 });
 
-// ✅ GLOBAL PARSER: Now we can use JSON for everything else
 app.use(express.json());
 
-
 // ==================================================================
-// 🚀 CACHE & SCHEDULER (Full Logic)
+// 🚀 CACHE & SCHEDULER
 // ==================================================================
 let COUNTRY_CACHE: any[] = [];
 let OPERATOR_CACHE: any[] = []; 
 
-// 1. Initial Load (On Server Start)
 const initializeCache = async () => {
   console.log('[Server] ⏳ Initializing Caches...');
   try {
     const c = await syncCountries(); if(c) COUNTRY_CACHE = c;
     const o = await syncOperators(); if(o) OPERATOR_CACHE = o;
     
-    // ✅ CONTROLLED SYNC: Only run if .env says so
     if (process.env.SYNC_ON_STARTUP === 'true') {
       console.log('[Server] 📦 SYNC_ON_STARTUP=true. Starting product sync...');
-      syncProducts(); // Run in background (don't await)
+      syncProducts(); 
     } else {
       console.log('[Server] ⏭️  SYNC_ON_STARTUP=false. Skipping product sync.');
     }
-    
     console.log(`[Server] 🚀 System Ready!`);
   } catch (e) { console.error("Cache init failed", e); }
 };
 
-// Run immediately on start
 initializeCache();
 
-// 2. Cron Schedule (Runs daily at 03:00 AM)
 cron.schedule('0 3 * * *', async () => {
   console.log('[Scheduler] 🌙 3 AM Sync Starting...');
   try {
@@ -106,16 +178,15 @@ cron.schedule('0 3 * * *', async () => {
 
 
 // ==================================================================
-// 🧩 UNIFIED PURCHASE LOGIC (Race-Condition Proof)
+// 🧩 UNIFIED PURCHASE LOGIC
 // ==================================================================
 async function processPurchase(data: { paymentId: string, mobile: string, productId: number, amount: number, currency: string, type: string }) {
   const { paymentId, mobile, productId, amount, currency, type } = data;
 
-  // 1. 🔒 ATTEMPT LOCK: Try to create PENDING record first
   try {
     await db.transaction.create({
       data: {
-        externalId: `pending_${paymentId}`, // Temporary ID
+        externalId: `pending_${paymentId}`,
         paymentIntentId: paymentId,
         paymentId: paymentId,
         mobile,
@@ -123,35 +194,21 @@ async function processPurchase(data: { paymentId: string, mobile: string, produc
         amount,
         currency,
         productType: type,
-        status: 'PENDING' // ⏳ Lock status
+        status: 'PENDING'
       }
     });
   } catch (err: any) {
-    // 🛑 If UNIQUE constraint fails, it means another process (Webhook or API) won the race
-    console.log(`[Purchase] Lock failed for ${paymentId} (Duplicate Request). Skipping.`);
-
-    // Fetch the existing one to return valid status to API
+    console.log(`[Purchase] Lock failed for ${paymentId} (Duplicate Request).`);
     const existing = await db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
-
-    // ✅ FIX: Treat 'PENDING' as success so the UI shows "Processing" instead of "Failed"
     const isSuccess = existing?.status === 'COMPLETED' || existing?.status === 'PENDING';
-
-    return {
-      success: isSuccess,
-      ...existing,
-      dbStatus: existing?.status
-    };
+    return { success: isSuccess, ...existing, dbStatus: existing?.status };
   }
 
-  // 2. 🚀 EXECUTE: We won the lock, so WE call DTOne
   console.log(`[Purchase] Lock Acquired. Processing order for ${paymentId}...`);
   const callbackUrl = process.env.DTONE_CALLBACK_URL ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone` : undefined;
   
   const result = await dtoneService.purchaseProduct(productId, mobile, amount, currency, type, callbackUrl);
 
-  // 3. 💾 UPDATE: Handle the result
-  
-  // A. NETWORK/API ERROR (Didn't even get a status code)
   if (!result.success || !result.data) {
     console.error(`[Purchase] ❌ API Error: ${result.error}`);
     await paymentService.refundPayment(paymentId);
@@ -163,33 +220,25 @@ async function processPurchase(data: { paymentId: string, mobile: string, produc
     return { success: false, error: result.error, code: result.code, refunded: true };
   }
 
-  // B. CHECK DTONE STATUS ID
   const statusId = result.data.statusId;
   let dbStatus = 'PENDING';
 
   if (statusId === 7) {
-      // ✅ CASE 1: SUCCESS
       dbStatus = 'COMPLETED';
       console.log(`[Purchase] ✅ Success! Top-up sent. DTOne Ref: ${result.data.externalId}`);
   } 
   else if ([3, 9].includes(statusId || 0)) { 
-      // ❌ CASE 2: HARD FAILURE (Rejected/Declined)
       console.warn(`[Purchase] ⚠️ Transaction Declined (Status ${statusId}). Refund initiated...`);
       await paymentService.refundPayment(paymentId);
       dbStatus = 'FAILED';
   } 
   else {
-      // ⏳ CASE 3: PENDING/OTHER
       console.log(`[Purchase] ⏳ Transaction Submitted (Status ${statusId}). Waiting for callback.`);
   }
 
-  // Update Database with Final Status
   await db.transaction.update({
     where: { paymentIntentId: paymentId },
-    data: { 
-      status: dbStatus, 
-      externalId: result.data.externalId 
-    }
+    data: { status: dbStatus, externalId: result.data.externalId }
   });
 
   return { 
@@ -205,6 +254,15 @@ async function processPurchase(data: { paymentId: string, mobile: string, produc
 // API ROUTES
 // ==================================================================
 
+const purchaseSchema = z.object({
+  productId: z.number().int().positive(), 
+  mobile: z.string().min(7).max(15).regex(/^\+?[0-9]+$/, "Invalid mobile format"), 
+  amount: z.number().positive(),
+  unit: z.string().length(3).optional(),
+  paymentId: z.string().startsWith("pi_", "Invalid Payment ID format"),
+  type: z.string().optional()
+});
+
 app.get('/api/countries', (_req: Request, res: Response): any => res.json(COUNTRY_CACHE));
 
 app.get('/api/operators', (req: Request, res: Response): any => {
@@ -218,17 +276,13 @@ app.get('/api/operators', (req: Request, res: Response): any => {
 app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   try {
     const { operatorId, currency, ranged } = req.query; 
-
     if (!operatorId) return res.status(400).json({ error: 'Operator ID is required' });
 
     const opId = Number(operatorId);
-    
-    // 1. Build DB Filter
     const whereClause: any = { operatorId: opId };
     if (currency) whereClause.currency = String(currency).toUpperCase();
     if (ranged === 'true') whereClause.type = { contains: 'RANGED' }; 
 
-    // 2. Fetch from DB
     const localProducts = await db.product.findMany({
       where: whereClause,
       orderBy: { amount: 'asc' }
@@ -249,7 +303,6 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
       return res.json(mapped);
     }
 
-    // 3. Fallback: Live API
     console.log(`[Cache Miss] Fetching live products for Op ${opId}`);
     const result = await dtoneService.getProductsForOperator(opId, 1, 100, 'en');
     
@@ -271,15 +324,17 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
 
 app.post('/api/create-payment-intent', async (req: Request, res: Response): Promise<any> => {
   const { amount, currency, mobile, productId, type } = req.body; 
-  
+  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+
   if (!amount || !currency) return res.status(400).json({ error: 'Amount and currency are required' });
   
   try {
-    const result = await paymentService.createPaymentIntent(amount, currency, {
-      mobile,
-      productId,
-      type
-    });
+    const result = await paymentService.createPaymentIntent(
+      amount, 
+      currency, 
+      { mobile, productId, type },
+      idempotencyKey 
+    );
     res.json(result);
   } catch (error: any) {
     res.status(500).json({ error: error.message });
@@ -298,18 +353,28 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-// ✅ UPDATED PURCHASE ROUTE
 app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
-  const { productId, mobile, amount, unit, paymentId, type } = req.body;
-  if (!productId || !mobile || !paymentId) return res.status(400).json({ error: 'Missing required fields' });
-
   try {
-    // Call the unified, race-proof logic
+    const cleanData = purchaseSchema.parse(req.body);
+    const { productId, mobile, amount, unit, paymentId, type } = cleanData;
+
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
+    if (paymentIntent.status !== 'succeeded') {
+        console.warn(`[Security] 🚨 Blocked attempt to use unpaid Intent: ${paymentId}`);
+        return res.status(403).json({ error: 'Payment not completed or failed.' });
+    }
+
+    const paidProductId = Number(paymentIntent.metadata?.productId);
+    if (paidProductId && paidProductId !== productId) {
+        console.warn(`[Security] 🚨 Product Mismatch! Paid: ${paidProductId}, Requested: ${productId}`);
+        return res.status(403).json({ error: 'Security verification failed: Product mismatch.' });
+    }
+
     const result = await processPurchase({
       paymentId, 
       mobile, 
-      productId: Number(productId), 
-      amount: Number(amount || 0), 
+      productId, 
+      amount, 
       currency: unit || 'UNKNOWN', 
       type: type || 'UNKNOWN'
     });
@@ -317,12 +382,17 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
     return res.json(result);
 
   } catch (error: any) {
+    if (error instanceof z.ZodError) {
+        return res.status(400).json({ 
+            error: 'Validation Error', 
+            details: error.issues.map((e: any) => e.message) 
+        });
+    }
     console.error("Purchase API Error:", error);
     return res.status(500).json({ success: false, error: 'Internal server error' });
   }
 });
 
-// ✅ NEW STATUS CHECK ROUTE
 app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Promise<any> => {
   const { paymentId } = req.params;
   try {
@@ -330,21 +400,15 @@ app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Prom
       where: { paymentIntentId: paymentId }
     });
 
-    if (!txn) {
-       return res.status(404).json({ error: 'Transaction not found' });
-    }
+    if (!txn) return res.json({ status: 'PENDING' });
 
-    return res.json({ 
-      status: txn.status, 
-      externalId: txn.externalId 
-    });
+    return res.json({ status: txn.status, externalId: txn.externalId });
   } catch (error: any) {
     console.error("Status Check Error:", error);
     return res.status(500).json({ error: error.message });
   }
 });
 
-// Callback Route
 app.post('/api/hooks/dtone', async (req: Request, res: Response) => { 
   console.log('[DTOne Callback]', req.body);
   res.status(200).send('OK'); 
