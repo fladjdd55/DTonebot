@@ -228,8 +228,7 @@ exports.dtoneService = {
     // C. GET PRODUCTS (UPDATED)
     // ----------------------------------------
     getProductsForOperator: function (operatorId_1) {
-        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, lang // ✅ ADDED: Default to 'en'
-        ) {
+        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, lang) {
             var page, allProducts, hasMore, response, rawList, list, products, error_3, err;
             if (serviceId === void 0) { serviceId = 1; }
             if (perPage === void 0) { perPage = 100; }
@@ -253,7 +252,7 @@ exports.dtoneService = {
                                 service_id: serviceId,
                                 page: page,
                                 per_page: perPage,
-                                'Accept-Language': lang // ✅ ADDED: Pass header to API
+                                'Accept-Language': lang
                             })];
                     case 3:
                         response = _a.sent();
@@ -273,8 +272,9 @@ exports.dtoneService = {
                     case 4:
                         console.log("[DTOne] \u2705 Found ".concat(allProducts.length, " total products."));
                         products = allProducts.map(function (p) {
-                            var _a, _b, _c, _d, _e, _f;
+                            var _a, _b, _c, _d, _e, _f, _g;
                             var dest = p.destination || {};
+                            var source = p.source || {}; // ✅ Extract source (cost)
                             var amount = 'N/A';
                             if (typeof dest.amount === 'number') {
                                 amount = "".concat(dest.amount, " ").concat(dest.unit);
@@ -283,16 +283,31 @@ exports.dtoneService = {
                                 amount = "".concat(dest.amount.min, "-").concat(dest.amount.max, " ").concat(dest.unit);
                             }
                             var benefits = ((_b = p.benefits) === null || _b === void 0 ? void 0 : _b.map(function (b) { return b.type; })) || [];
+                            // ✅ Extract cost price (source amount)
+                            var costPrice;
+                            var costCurrency;
+                            if (typeof source.amount === 'number') {
+                                costPrice = source.amount;
+                                costCurrency = source.unit || 'USD';
+                            }
+                            else if ((_c = source.amount) === null || _c === void 0 ? void 0 : _c.min) {
+                                // For ranged products, use minimum cost
+                                costPrice = source.amount.min;
+                                costCurrency = source.unit || 'USD';
+                            }
                             return {
                                 id: p.id,
                                 name: p.name,
                                 type: p.type,
                                 amount: amount,
                                 currency: dest.unit,
-                                min: ((_c = dest.amount) === null || _c === void 0 ? void 0 : _c.min) || 0,
-                                max: ((_d = dest.amount) === null || _d === void 0 ? void 0 : _d.max) || 0,
+                                min: ((_d = dest.amount) === null || _d === void 0 ? void 0 : _d.min) || 0,
+                                max: ((_e = dest.amount) === null || _e === void 0 ? void 0 : _e.max) || 0,
                                 benefits: benefits,
-                                subserviceId: (_f = (_e = p.service) === null || _e === void 0 ? void 0 : _e.subservice) === null || _f === void 0 ? void 0 : _f.id
+                                subserviceId: (_g = (_f = p.service) === null || _f === void 0 ? void 0 : _f.subservice) === null || _g === void 0 ? void 0 : _g.id,
+                                // ✅ NEW: Cost fields
+                                costPrice: costPrice,
+                                costCurrency: costCurrency
                             };
                         });
                         return [2 /*return*/, { success: true, data: products }];

@@ -27,6 +27,8 @@ export interface Product {
   currency: string;
   min: number;
   max: number;
+  costPrice?: number;
+  costCurrency?: string;
   subserviceId?: number;
   benefits?: string[];
 }

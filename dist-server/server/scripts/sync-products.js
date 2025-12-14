@@ -147,7 +147,6 @@ function syncProducts() {
                                     case 5:
                                         // CASE 2: Other Error
                                         if (!apiRes.success) {
-                                            // console.error(`❌ Error Op ${op.id}: ${apiRes.error}`); // Optional: Un-comment to see all errors
                                             opSuccess = true; // Treat as "done" so we don't retry forever on 404s
                                             return [3 /*break*/, 10];
                                         }
@@ -162,6 +161,9 @@ function syncProducts() {
                                                     minAmount: p.min,
                                                     maxAmount: p.max,
                                                     serviceId: p.subserviceId || 1,
+                                                    // ✅ NEW: Update cost price
+                                                    costPrice: p.costPrice || null,
+                                                    costCurrency: p.costCurrency || 'USD',
                                                     updatedAt: new Date()
                                                 },
                                                 create: {
@@ -173,10 +175,12 @@ function syncProducts() {
                                                     currency: p.currency,
                                                     amount: fixedAmount,
                                                     minAmount: p.min,
-                                                    maxAmount: p.max
+                                                    maxAmount: p.max,
+                                                    // ✅ NEW: Save cost price
+                                                    costPrice: p.costPrice || null,
+                                                    costCurrency: p.costCurrency || 'USD'
                                                 }
                                             }).catch(function (err) {
-                                                // ✅ Log error specifically for this product but DON'T crash the loop
                                                 console.error("   \u274C Failed to save product ".concat(p.id, ":"), err.message);
                                                 return null;
                                             });
@@ -184,16 +188,15 @@ function syncProducts() {
                                         return [4 /*yield*/, Promise.all(upsertPromises)];
                                     case 6:
                                         results = _b.sent();
-                                        // ✅ Count only successful writes
                                         productsSaved_1 += results.filter(function (r) { return r !== null; }).length;
                                         _b.label = 7;
                                     case 7:
-                                        opSuccess = true; // Mark done
+                                        opSuccess = true;
                                         return [3 /*break*/, 9];
                                     case 8:
                                         err_1 = _b.sent();
                                         console.error("\u274C Crash on Op ".concat(op.id, ":"), err_1);
-                                        opSuccess = true; // Move on
+                                        opSuccess = true;
                                         return [3 /*break*/, 9];
                                     case 9: return [3 /*break*/, 1];
                                     case 10: 

@@ -172,15 +172,16 @@ export const dtoneService = {
   // ----------------------------------------
   // C. GET PRODUCTS (UPDATED)
   // ----------------------------------------
+  
   async getProductsForOperator(
-    operatorId: number, 
-    serviceId: number = 1, 
+    operatorId: number,
+    serviceId: number = 1,
     perPage: number = 100,
-    lang: string = 'en' // ✅ ADDED: Default to 'en'
+    lang: string = 'en'
   ): Promise<ApiResponse<Product[]>> {
-    
+
     console.log(`[DTOne] Fetching Products: Op=${operatorId}, Lang=${lang}`);
-    
+
     try {
       let page = 1;
       let allProducts: any[] = [];
@@ -188,15 +189,15 @@ export const dtoneService = {
 
       while (hasMore) {
         console.log(`   ... fetching page ${page}`);
-        
+
         const response = await dtone.getProducts({
           operator_id: operatorId,
-          service_id: serviceId, 
+          service_id: serviceId,
           page: page,
           per_page: perPage,
-          'Accept-Language': lang // ✅ ADDED: Pass header to API
+          'Accept-Language': lang
         });
-        
+
         const rawList = response.data || response;
         const list = (Array.isArray(rawList) ? rawList : ((rawList as any).payload || [])) as any[];
 
@@ -213,8 +214,10 @@ export const dtoneService = {
 
       const products: Product[] = allProducts.map(p => {
         const dest = p.destination || {};
+        const source = p.source || {};  // ✅ Extract source (cost)
+
         let amount = 'N/A';
-        
+
         if (typeof dest.amount === 'number') {
           amount = `${dest.amount} ${dest.unit}`;
         } else if (dest.amount?.min) {
@@ -222,6 +225,19 @@ export const dtoneService = {
         }
 
         const benefits = p.benefits?.map((b: any) => b.type) || [];
+
+        // ✅ Extract cost price (source amount)
+        let costPrice: number | undefined;
+        let costCurrency: string | undefined;
+
+        if (typeof source.amount === 'number') {
+          costPrice = source.amount;
+          costCurrency = source.unit || 'USD';
+        } else if (source.amount?.min) {
+          // For ranged products, use minimum cost
+          costPrice = source.amount.min;
+          costCurrency = source.unit || 'USD';
+        }
 
         return {
           id: p.id,
@@ -232,7 +248,10 @@ export const dtoneService = {
           min: dest.amount?.min || 0,
           max: dest.amount?.max || 0,
           benefits: benefits,
-          subserviceId: p.service?.subservice?.id 
+          subserviceId: p.service?.subservice?.id,
+          // ✅ NEW: Cost fields
+          costPrice,
+          costCurrency
         };
       });
 

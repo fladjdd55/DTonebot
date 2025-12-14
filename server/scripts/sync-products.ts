@@ -98,16 +98,16 @@ export async function syncProducts() {
 
                 // CASE 2: Other Error
                 if (!apiRes.success) {
-                    // console.error(`❌ Error Op ${op.id}: ${apiRes.error}`); // Optional: Un-comment to see all errors
                     opSuccess = true; // Treat as "done" so we don't retry forever on 404s
                     break;
                 }
 
                 // CASE 3: Success
                 if (apiRes.data && apiRes.data.length > 0) {
-                    // ✅ FIX: Handle individual writes safely
+                    // ✅ Handle individual writes safely
                     const upsertPromises = apiRes.data.map((p) => {
                         const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                        
                         return db.product.upsert({
                             where: { id: p.id },
                             update: {
@@ -116,6 +116,9 @@ export async function syncProducts() {
                                 minAmount: p.min,
                                 maxAmount: p.max,
                                 serviceId: p.subserviceId || 1,
+                                // ✅ NEW: Update cost price
+                                costPrice: p.costPrice || null,
+                                costCurrency: p.costCurrency || 'USD',
                                 updatedAt: new Date()
                             },
                             create: {
@@ -127,25 +130,26 @@ export async function syncProducts() {
                                 currency: p.currency,
                                 amount: fixedAmount,
                                 minAmount: p.min,
-                                maxAmount: p.max
+                                maxAmount: p.max,
+                                // ✅ NEW: Save cost price
+                                costPrice: p.costPrice || null,
+                                costCurrency: p.costCurrency || 'USD'
                             }
                         }).catch(err => {
-                            // ✅ Log error specifically for this product but DON'T crash the loop
                             console.error(`   ❌ Failed to save product ${p.id}:`, err.message);
                             return null;
                         });
                     });
 
                     const results = await Promise.all(upsertPromises);
-                    // ✅ Count only successful writes
                     productsSaved += results.filter(r => r !== null).length;
                 }
                 
-                opSuccess = true; // Mark done
+                opSuccess = true;
 
             } catch (err) {
                 console.error(`❌ Crash on Op ${op.id}:`, err);
-                opSuccess = true; // Move on
+                opSuccess = true;
             }
         }
 

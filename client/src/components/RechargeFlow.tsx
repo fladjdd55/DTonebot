@@ -17,11 +17,19 @@ import ConfirmationModal from './ConfirmationModal';
 
 const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_ORDER_USD) || 5;
 
-const isProductEligible = (p: Product) => {
-  if (p.currency !== 'USD') return true; 
-  const price = parseFloat(p.amount.split(' ')[0]);
-  return price >= MIN_USD_AMOUNT;
+/**
+ * Strict filter: Only show products with valid costPrice >= minimum
+ */
+const isProductEligible = (p: Product): boolean => {
+  // Must have costPrice to be shown
+  if (p.costPrice === undefined || p.costPrice === null) {
+    return false;
+  }
+  
+  // Check against minimum (costPrice is always USD from DTOne)
+  return p.costPrice >= MIN_USD_AMOUNT;
 };
+
 
 export default function RechargeFlow() {
   const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1); 
