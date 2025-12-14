@@ -14,6 +14,24 @@ export interface Product {
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const API_URL = `${BASE_URL}/api`;
 
+// Token storage key (must match authApi.ts)
+const TOKEN_KEY = 'auth_token';
+
+// Helper to get stored token
+const getStoredToken = (): string | null => {
+  return localStorage.getItem(TOKEN_KEY);
+};
+
+// Helper to build headers with optional auth
+const getHeaders = (): HeadersInit => {
+  const headers: HeadersInit = { 'Content-Type': 'application/json' };
+  const token = getStoredToken();
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  return headers;
+};
+
 // ✅ FIX: Define a reasonable timeout (e.g., 90s)
 const REQUEST_TIMEOUT_MS = 90000;
 
@@ -49,7 +67,7 @@ export const rechargeApi = {
   async lookup(mobile: string) {
     const res = await fetchWithTimeout(`${API_URL}/lookup`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getHeaders(), // ✅ Include auth
       body: JSON.stringify({ mobile })
     });
     const data = await res.json();
@@ -66,8 +84,8 @@ export const rechargeApi = {
     if (ranged) params.append('ranged', 'true');
 
     const res = await fetchWithTimeout(`${API_URL}/products?${params.toString()}`, {
-      method: 'GET', // ✅ Must match Backend
-      headers: { 'Content-Type': 'application/json' }
+      method: 'GET',
+      headers: getHeaders() // ✅ Include auth
     });
     
     const data = await res.json();
@@ -75,25 +93,25 @@ export const rechargeApi = {
     return data;
   },
 
-  async purchase(productId: number, mobile: string, amount: number, unit: string, type: string,  paymentId?: string) {
+  async purchase(productId: number, mobile: string, amount: number, unit: string, type: string, paymentId?: string) {
     const res = await fetchWithTimeout(`${API_URL}/purchase`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ productId, mobile, amount, unit, type,  paymentId })
+      headers: getHeaders(), // ✅ Include auth - THIS IS THE KEY FIX
+      body: JSON.stringify({ productId, mobile, amount, unit, type, paymentId })
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Transaction failed');
     return data;
   },
 
-  // ✅ NEW METHOD: Check Transaction Status (Fixes your TS Error)
+  // ✅ NEW METHOD: Check Transaction Status
   async checkStatus(paymentId: string) {
     const res = await fetchWithTimeout(`${API_URL}/transaction/${paymentId}`, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' }
+      headers: getHeaders() // ✅ Include auth
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to check status');
     return data;
   }
-};
+}

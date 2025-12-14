@@ -145,7 +145,7 @@ var processedWebhooks = new Set();
 // ==================================================================
 function processPurchase(data_1) {
     return __awaiter(this, arguments, void 0, function (data, source) {
-        var paymentId, mobile, productId, amount, currency, type, userId, existing, err_1, check, callbackUrl, result, refund, statusId, dbStatus;
+        var paymentId, mobile, productId, amount, currency, type, userId, existing, ageMs, err_1, check, callbackUrl, result, refund, statusId, dbStatus;
         if (source === void 0) { source = 'API'; }
         return __generator(this, function (_a) {
             switch (_a.label) {
@@ -157,17 +157,26 @@ function processPurchase(data_1) {
                 case 1:
                     existing = _a.sent();
                     if (existing) {
+                        // Already completed - skip
                         if (existing.status === 'COMPLETED') {
                             console.log("[Purchase] \u23ED\uFE0F Already completed: ".concat(paymentId));
                             return [2 /*return*/, __assign(__assign({ success: true }, existing), { dbStatus: 'COMPLETED', alreadyProcessed: true })];
                         }
-                        if (existing.status === 'PENDING' && existing.processedVia === 'API' && source === 'WEBHOOK') {
-                            console.log("[Purchase] \u23ED\uFE0F API is processing: ".concat(paymentId, ", webhook backing off"));
-                            return [2 /*return*/, { success: true, dbStatus: 'PENDING', alreadyProcessed: true }];
-                        }
+                        // Already failed/refunded - skip
                         if (existing.status === 'REFUNDED' || existing.status === 'FAILED') {
                             console.log("[Purchase] \u23ED\uFE0F Already failed/refunded: ".concat(paymentId));
                             return [2 /*return*/, __assign(__assign({ success: false }, existing), { dbStatus: existing.status, alreadyProcessed: true })];
+                        }
+                        // ✅ FIX: If PENDING and someone else is processing, BACK OFF
+                        if (existing.status === 'PENDING') {
+                            ageMs = Date.now() - new Date(existing.createdAt).getTime();
+                            // If record is fresh (< 60s), let the original processor finish
+                            if (ageMs < 60000) {
+                                console.log("[Purchase] \u23ED\uFE0F Already being processed by ".concat(existing.processedVia, " (").concat(Math.round(ageMs / 1000), "s old), ").concat(source, " backing off"));
+                                return [2 /*return*/, { success: true, dbStatus: 'PENDING', alreadyProcessed: true }];
+                            }
+                            // If record is stale (> 60s), take over
+                            console.log("[Purchase] \u26A0\uFE0F Stale PENDING record (".concat(Math.round(ageMs / 1000), "s), ").concat(source, " taking over"));
                         }
                     }
                     if (!!existing) return [3 /*break*/, 8];
@@ -186,7 +195,7 @@ function processPurchase(data_1) {
                                 productType: type,
                                 status: 'PENDING',
                                 processedVia: source,
-                                userId: userId || null // Link to user if logged in
+                                userId: userId || null
                             }
                         })];
                 case 3:
@@ -196,7 +205,8 @@ function processPurchase(data_1) {
                 case 4:
                     err_1 = _a.sent();
                     if (!(err_1.code === 'P2002')) return [3 /*break*/, 6];
-                    console.log("[Purchase] \u26A0\uFE0F Lock conflict for ".concat(paymentId, ", checking status..."));
+                    // Someone else got the lock first - back off
+                    console.log("[Purchase] \u23ED\uFE0F Lock conflict for ".concat(paymentId, ", backing off..."));
                     return [4 /*yield*/, db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } })];
                 case 5:
                     check = _a.sent();
@@ -207,11 +217,14 @@ function processPurchase(data_1) {
                         }];
                 case 6: throw err_1;
                 case 7: return [3 /*break*/, 10];
-                case 8: return [4 /*yield*/, db_1.db.transaction.update({
+                case 8: 
+                // Update processedVia for tracking (but we already decided to proceed above)
+                return [4 /*yield*/, db_1.db.transaction.update({
                         where: { paymentIntentId: paymentId },
                         data: { processedVia: source }
                     })];
                 case 9:
+                    // Update processedVia for tracking (but we already decided to proceed above)
                     _a.sent();
                     _a.label = 10;
                 case 10:

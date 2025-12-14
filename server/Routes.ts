@@ -113,7 +113,7 @@ async function processPurchase(
     amount: number;
     currency: string;
     type: string;
-    userId?: string; // Optional user ID for logged-in users
+    userId?: string;
   },
   source: 'API' | 'WEBHOOK' = 'API'
 ): Promise<any> {
@@ -126,19 +126,30 @@ async function processPurchase(
   });
 
   if (existing) {
+    // Already completed - skip
     if (existing.status === 'COMPLETED') {
       console.log(`[Purchase] ⏭️ Already completed: ${paymentId}`);
       return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
     }
 
-    if (existing.status === 'PENDING' && existing.processedVia === 'API' && source === 'WEBHOOK') {
-      console.log(`[Purchase] ⏭️ API is processing: ${paymentId}, webhook backing off`);
-      return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
-    }
-
+    // Already failed/refunded - skip
     if (existing.status === 'REFUNDED' || existing.status === 'FAILED') {
       console.log(`[Purchase] ⏭️ Already failed/refunded: ${paymentId}`);
       return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
+    }
+
+    // ✅ FIX: If PENDING and someone else is processing, BACK OFF
+    if (existing.status === 'PENDING') {
+      const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+      
+      // If record is fresh (< 60s), let the original processor finish
+      if (ageMs < 60000) {
+        console.log(`[Purchase] ⏭️ Already being processed by ${existing.processedVia} (${Math.round(ageMs/1000)}s old), ${source} backing off`);
+        return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
+      }
+      
+      // If record is stale (> 60s), take over
+      console.log(`[Purchase] ⚠️ Stale PENDING record (${Math.round(ageMs/1000)}s), ${source} taking over`);
     }
   }
 
@@ -157,13 +168,14 @@ async function processPurchase(
           productType: type,
           status: 'PENDING',
           processedVia: source,
-          userId: userId || null // Link to user if logged in
+          userId: userId || null
         }
       });
       console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}${userId ? ` (User: ${userId})` : ' (Guest)'}`);
     } catch (err: any) {
       if (err.code === 'P2002') {
-        console.log(`[Purchase] ⚠️ Lock conflict for ${paymentId}, checking status...`);
+        // Someone else got the lock first - back off
+        console.log(`[Purchase] ⏭️ Lock conflict for ${paymentId}, backing off...`);
         const check = await db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
         return {
           success: check?.status === 'COMPLETED',
@@ -174,6 +186,7 @@ async function processPurchase(
       throw err;
     }
   } else {
+    // Update processedVia for tracking (but we already decided to proceed above)
     await db.transaction.update({
       where: { paymentIntentId: paymentId },
       data: { processedVia: source }

@@ -106,8 +106,7 @@ export default function TransactionHistory({ isOpen, onClose }: TransactionHisto
           </div>
           <button 
             onClick={onClose}
-            className="text-white/80 hover:text-white transition-colors p-1"
-          >
+            className="text-white/80 hover:text-white transition-colors p-2 -mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center">
             <X className="w-5 h-5" />
           </button>
         </div>
