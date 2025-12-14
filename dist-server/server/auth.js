@@ -279,6 +279,9 @@ exports.authService = {
      * Generate JWT token
      */
     generateToken: function (userId, email) {
-        return jsonwebtoken_1.default.sign({ userId: userId, email: email }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+        var payload = { userId: userId, email: email };
+        return jsonwebtoken_1.default.sign(payload, JWT_SECRET, {
+            expiresIn: JWT_EXPIRES_IN
+        });
     }
 };

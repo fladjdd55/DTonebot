@@ -1,4 +1,4 @@
-mport React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { X, History, Loader2, CheckCircle, XCircle, Clock, RefreshCw, ChevronLeft, ChevronRight, Phone, Calendar, DollarSign } from 'lucide-react';
 import { authApi, Transaction } from '../../services/authApi';
 

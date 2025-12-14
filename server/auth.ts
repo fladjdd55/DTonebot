@@ -227,11 +227,9 @@ export const authService = {
    * Generate JWT token
    */
   generateToken(userId: string, email: string): string {
-    return jwt.sign(
-      { userId, email } as JwtPayload,
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
+    const payload: JwtPayload = { userId, email };
+    return jwt.sign(payload, JWT_SECRET, { 
+      expiresIn: JWT_EXPIRES_IN as any
+    });
   }
 };
-

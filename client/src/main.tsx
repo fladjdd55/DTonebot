@@ -2,12 +2,13 @@
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-// ✅ Import the Error Boundary
 import { ErrorBoundary } from './components/ErrorBoundary.tsx'
+import { AuthProvider } from './contexts/AuthContext.tsx'
 
 createRoot(document.getElementById('root')!).render(
-  // ✅ Wrap the entire App
   <ErrorBoundary>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </ErrorBoundary>
 )
