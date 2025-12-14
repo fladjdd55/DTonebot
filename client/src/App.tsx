@@ -18,11 +18,11 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen-safe bg-gray-50">
       {/* Header */}
-      <header className="bg-gradient-to-r from-indigo-600 to-blue-600 shadow-lg">
+      <header className="bg-gradient-to-r from-indigo-600 to-blue-600 shadow-lg safe-top">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between h-16 min-h-[64px]">
             {/* Logo */}
             <div className="flex items-center gap-2 text-white">
               <Phone className="w-6 h-6" />

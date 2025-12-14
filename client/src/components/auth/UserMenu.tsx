@@ -35,9 +35,9 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
     return (
       <button
         onClick={onLoginClick}
-        className="flex items-center gap-2 px-3 py-2 sm:px-4 sm:py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white text-sm font-medium transition-colors"
+        className="flex items-center justify-center gap-2 px-4 py-2.5 bg-white/10 hover:bg-white/20 active:bg-white/30 rounded-lg text-white text-sm font-medium transition-colors min-h-[44px] min-w-[44px]"
       >
-        <User className="w-4 h-4" />
+        <User className="w-5 h-5" />
         <span className="hidden sm:inline">Sign In</span>
       </button>
     );
@@ -52,7 +52,7 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
     <div ref={menuRef} className="relative">
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-2 py-1.5 sm:px-3 sm:py-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-colors"
+        className="flex items-center gap-2 px-3 py-2 bg-white/10 hover:bg-white/20 active:bg-white/30 rounded-lg text-white transition-colors min-h-[44px]"
       >
         {/* Avatar */}
         <div className="w-7 h-7 bg-indigo-500 rounded-full flex items-center justify-center text-xs font-bold">
@@ -87,7 +87,7 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
                 onHistoryClick();
                 setIsOpen(false);
               }}
-              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+              className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 active:bg-gray-100 flex items-center gap-3 min-h-[48px]"
             >
               <History className="w-4 h-4 text-gray-400" />
               Transaction History
@@ -98,7 +98,7 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
                 onProfileClick();
                 setIsOpen(false);
               }}
-              className="w-full px-4 py-2 text-left text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-3"
+              className="w-full px-4 py-3 text-left text-sm text-gray-700 hover:bg-gray-50 active:bg-gray-100 flex items-center gap-3 min-h-[48px]"
             >
               <Settings className="w-4 h-4 text-gray-400" />
               Account Settings
@@ -109,7 +109,7 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
           <div className="border-t border-gray-100 pt-1">
             <button
               onClick={handleLogout}
-              className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-red-50 flex items-center gap-3"
+              className="w-full px-4 py-3 text-left text-sm text-red-600 hover:bg-red-50 active:bg-red-100 flex items-center gap-3 min-h-[48px]"
             >
               <LogOut className="w-4 h-4" />
               Sign Out

@@ -1,3 +1,93 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ==================================================================
+   MOBILE-FRIENDLY ENHANCEMENTS
+   ================================================================== */
+
+/* Safe Area Support */
+:root {
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-area-left: env(safe-area-inset-left, 0px);
+  --safe-area-right: env(safe-area-inset-right, 0px);
+}
+
+/* Prevent iOS Input Zoom */
+@supports (-webkit-touch-callout: none) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+/* Smooth Scrolling */
+html {
+  scroll-behavior: smooth;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Prevent Long Press Context Menu */
+button, a, .touchable {
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Active State Feedback */
+button:active:not(:disabled),
+.touchable:active {
+  transform: scale(0.98);
+  opacity: 0.9;
+}
+
+/* Safe Area Utilities */
+.safe-top {
+  padding-top: var(--safe-area-top);
+}
+
+.safe-bottom {
+  padding-bottom: var(--safe-area-bottom);
+}
+
+.safe-all {
+  padding: var(--safe-area-top) var(--safe-area-right) var(--safe-area-bottom) var(--safe-area-left);
+}
+
+/* Touch Target (44x44px minimum) */
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+/* Hide Scrollbar */
+.scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.scrollbar-hide::-webkit-scrollbar {
+  display: none;
+}
+
+/* Remove Hover on Touch Devices */
+@media (hover: none) {
+  button:hover {
+    opacity: 1;
+  }
+}
+
+/* Prevent Pull-to-Refresh in Modals */
+.overscroll-contain {
+  overscroll-behavior: contain;
+}
+
+/* Dynamic Viewport Height */
+.min-h-screen-safe {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Stripe Elements Fix */
+.StripeElement {
+  padding: 14px 12px !important;
+  font-size: 16px !important;
+}

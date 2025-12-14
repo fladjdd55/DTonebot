@@ -4,27 +4,32 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     
+    <!-- MOBILE VIEWPORT - Critical for proper mobile rendering -->
     <meta 
       name="viewport" 
       content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" 
     />
     
+    <!-- PWA / Mobile App Appearance -->
     <meta name="theme-color" content="#4f46e5" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="RechargeBot" />
     
+    <!-- Prevent Phone Number Detection (iOS) -->
     <meta name="format-detection" content="telephone=no" />
     
+    <!-- Prevent Translation Popup -->
     <meta name="google" content="notranslate" />
     
     <title>RechargeBot - Mobile Top-up</title>
     
+    <!-- Preconnect to External Services -->
     <link rel="preconnect" href="https://js.stripe.com" />
     <link rel="preconnect" href="https://api.stripe.com" />
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/client/src/main.tsx"></script>
+    <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

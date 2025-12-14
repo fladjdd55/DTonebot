@@ -328,7 +328,7 @@ export default function RechargeFlow() {
   if (countriesError && !usingFallback && countries.length === 0) return <div className="text-center p-10 text-red-600">{countriesError}</div>;
 
   return (
-    <div className="min-h-screen bg-gray-50 flex justify-center p-4 pt-10">
+    <div className="min-h-screen-safe bg-gray-50 flex justify-center p-4 pt-10 safe-bottom">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
         <div className="bg-indigo-600 p-6 text-white relative">
@@ -439,7 +439,7 @@ export default function RechargeFlow() {
                     className="w-full mb-3 px-4 py-2 border rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none text-sm"
                   />
                   
-                  <div className="grid grid-cols-2 gap-2 max-h-60 overflow-y-auto">
+                  <div className="grid grid-cols-2 gap-3 max-h-60 overflow-y-auto scrollbar-hide">
                     {filteredOperators.length === 0 ? (
                        <div className="col-span-2 text-center text-sm text-gray-400 py-4">
                          {operatorSearch ? 'No operators found matching your search' : 'No operators found for this country.'}
@@ -449,7 +449,7 @@ export default function RechargeFlow() {
                         <button
                           key={op.id}
                           onClick={() => handleManualSelect(op)}
-                          className="p-3 border rounded-lg hover:border-indigo-500 hover:bg-indigo-50 text-left text-sm font-medium text-gray-700 transition-colors"
+                          className="p-4 border rounded-lg hover:border-indigo-500 hover:bg-indigo-50 active:scale-[0.98] text-left text-sm font-medium text-gray-700 transition-colors min-h-[52px]"
                         >
                           {op.name}
                         </button>
@@ -533,7 +533,7 @@ export default function RechargeFlow() {
               <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
                 <button 
                   onClick={() => setPriceFilter('ALL')} 
-                  className={`px-3 py-1 text-xs rounded-full border whitespace-nowrap transition-colors ${priceFilter === 'ALL' ? 'bg-black text-white border-black' : 'bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200'}`}
+                  className={`px-4 py-2 text-sm rounded-full border whitespace-nowrap transition-colors min-h-[44px] touch-target ${priceFilter === 'ALL' ? 'bg-black text-white border-black' : 'bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200'}`}
                 >
                   All
                 </button>
@@ -541,7 +541,7 @@ export default function RechargeFlow() {
                   <button 
                     key={amt}
                     onClick={() => setPriceFilter(amt)}
-                    className={`px-3 py-1 text-xs rounded-full border whitespace-nowrap transition-colors ${priceFilter === amt ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'}`}
+                    className={`px-4 py-2 text-sm rounded-full border whitespace-nowrap transition-colors min-h-[44px] ${priceFilter === amt ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:border-indigo-300'}`}
                   >
                     ${amt}
                   </button>
@@ -552,7 +552,7 @@ export default function RechargeFlow() {
                 <select 
                   value={currency} 
                   onChange={(e) => setCurrency(e.target.value)} 
-                  className="border p-2 rounded-lg text-sm flex-1 bg-white"
+                  className="border p-3 rounded-lg text-base flex-1 bg-white min-h-[48px]"
                   disabled={availableCurrencies.length <= 1} 
                 >
                   <option value="">All Currencies</option>
@@ -568,7 +568,7 @@ export default function RechargeFlow() {
                     <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
-                      className={`flex-1 py-2 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-1 ${
+                      className={`flex-1 py-3 text-sm font-bold rounded-md transition-all flex items-center justify-center gap-1 min-h-[48px] ${
                         activeTab === tab ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'
                       }`}
                     >
@@ -594,17 +594,17 @@ export default function RechargeFlow() {
                 {activeTab === 'AIRTIME' && (
                   <div className="space-y-2">
                     {categorizedProducts.AIRTIME.length > 0 ? (
-                      <div className="grid grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1 scrollbar-hide">
                         {categorizedProducts.AIRTIME.map(p => (
                           <button 
                             key={p.id} 
                             onClick={() => handlePurchase(p)} 
-                            className="flex flex-col items-center justify-center p-2 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 hover:shadow-sm transition-all h-20 bg-white group"
+                            className="flex flex-col items-center justify-center p-3 border border-gray-200 rounded-xl hover:border-indigo-500 hover:bg-indigo-50/50 active:scale-[0.98] transition-all min-h-[80px] bg-white group touch-target"
                           >
-                            <span className="font-bold text-gray-800 text-lg group-hover:text-indigo-700">
+                            <span className="font-bold text-gray-800 text-xl group-hover:text-indigo-700">
                               {p.amount.split(' ')[0]}
                             </span>
-                            <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
+                            <span className="text-xs font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
                               {p.currency}
                             </span>
                           </button>
@@ -658,7 +658,7 @@ export default function RechargeFlow() {
                       </div>
                     ) : (
                       categorizedProducts[activeTab].map(p => (
-                        <div key={p.id} onClick={() => handlePurchase(p)} className="group p-4 border rounded-xl hover:border-indigo-500 cursor-pointer bg-white transition-all hover:shadow-sm">
+                        <div key={p.id} onClick={() => handlePurchase(p)} className="group p-4 border rounded-xl hover:border-indigo-500 active:scale-[0.99] cursor-pointer bg-white transition-all hover:shadow-sm min-h-[72px]">
                           <div className="flex justify-between items-start">
                             <div>
                               <div className="font-bold text-gray-800">{p.name}</div>

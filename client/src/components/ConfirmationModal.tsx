@@ -30,13 +30,13 @@ const ConfirmationModal = ({
   const currency = product.amount.split(' ')[1] || product.currency;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in duration-200">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-200 safe-bottom">
+      <div className="bg-white sm:rounded-2xl rounded-t-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-bottom sm:zoom-in duration-200 overscroll-contain">
         {/* Header */}
         <div className="bg-gradient-to-r from-indigo-600 to-blue-600 p-6 text-white relative">
           <button 
             onClick={onClose}
-            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            className="absolute top-3 right-3 text-white/80 hover:text-white transition-colors p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
           >
             <X className="w-5 h-5" />
           </button>
@@ -108,13 +108,13 @@ const ConfirmationModal = ({
         <div className="p-6 pt-0 space-y-3">
           <button
             onClick={onConfirm}
-            className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white py-3 rounded-lg font-bold hover:from-indigo-700 hover:to-blue-700 transition-all shadow-lg hover:shadow-xl"
+            className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white py-4 rounded-lg font-bold hover:from-indigo-700 hover:to-blue-700 active:scale-[0.99] transition-all shadow-lg hover:shadow-xl min-h-[52px]"
           >
             Confirm & Proceed to Payment
           </button>
           <button
             onClick={onClose}
-            className="w-full bg-gray-100 text-gray-700 py-3 rounded-lg font-semibold hover:bg-gray-200 transition-colors"
+            className="w-full bg-gray-100 text-gray-700 py-4 rounded-lg font-semibold hover:bg-gray-200 active:scale-[0.99] transition-colors min-h-[52px]"
           >
             Cancel
           </button>

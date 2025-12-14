@@ -103,7 +103,7 @@ function CheckoutForm({
       <button
         disabled={isLoading || !stripe || !elements}
         type="submit"
-        className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2"
+        className="w-full bg-indigo-600 text-white py-4 rounded-lg font-bold hover:bg-indigo-700 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex justify-center items-center gap-2 min-h-[52px] transition-all"
       >
         {isLoading ? (
           <>
@@ -185,8 +185,8 @@ export default function PaymentModal({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in fade-in zoom-in duration-200 max-h-[90vh] flex flex-col">
+    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 safe-bottom">
+      <div className="bg-white sm:rounded-2xl rounded-t-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-bottom sm:zoom-in duration-200 max-h-[90vh] flex flex-col overscroll-contain">
         <div className="bg-gray-50 p-4 flex justify-between items-center border-b shrink-0">
           <div>
             <h3 className="font-bold text-gray-800">Secure Payment</h3>
@@ -195,7 +195,7 @@ export default function PaymentModal({
           <button 
             onClick={onClose} 
             disabled={isProcessingTransaction}
-            className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-gray-400 hover:text-gray-600 disabled:opacity-50 disabled:cursor-not-allowed p-2 -mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
           >
             <X className="w-5 h-5" />
           </button>
