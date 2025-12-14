@@ -51,7 +51,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
     apiVersion: '2023-10-16',
 });
-// ✅ NEW: Simple Notification Helper (Discord/Slack)
+// Simple Notification Helper (Discord/Slack)
 function sendAdminAlert(message) {
     return __awaiter(this, void 0, void 0, function () {
         var webhookUrl, err_1;
@@ -82,9 +82,9 @@ function sendAdminAlert(message) {
 exports.paymentService = {
     /**
      * Creates a Payment Intent and returns ID + Secret
+     * Now supports userId for linking transactions to accounts
      */
-    createPaymentIntent: function (amount, currency, metadata, idempotencyKey // 👈 Accepted here
-    ) {
+    createPaymentIntent: function (amount, currency, metadata, idempotencyKey) {
         return __awaiter(this, void 0, void 0, function () {
             var amountInCents, paymentIntent, error_1;
             var _a;
@@ -100,10 +100,11 @@ exports.paymentService = {
                                 metadata: {
                                     mobile: (metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || '',
                                     productId: ((_a = metadata === null || metadata === void 0 ? void 0 : metadata.productId) === null || _a === void 0 ? void 0 : _a.toString()) || '',
-                                    type: (metadata === null || metadata === void 0 ? void 0 : metadata.type) || ''
+                                    type: (metadata === null || metadata === void 0 ? void 0 : metadata.type) || '',
+                                    userId: (metadata === null || metadata === void 0 ? void 0 : metadata.userId) || '' // Store user ID in payment metadata
                                 }
                             }, {
-                                idempotencyKey: idempotencyKey // 👈 Passed to Stripe
+                                idempotencyKey: idempotencyKey
                             })];
                     case 1:
                         paymentIntent = _b.sent();

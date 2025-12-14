@@ -14,7 +14,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', {
   apiVersion: '2023-10-16' as any,
 });
 
-// ✅ NEW: Simple Notification Helper (Discord/Slack)
+// Simple Notification Helper (Discord/Slack)
 async function sendAdminAlert(message: string) {
   const webhookUrl = process.env.ADMIN_WEBHOOK_URL; 
   if (!webhookUrl) {
@@ -32,12 +32,18 @@ async function sendAdminAlert(message: string) {
 export const paymentService = {
   /**
    * Creates a Payment Intent and returns ID + Secret
+   * Now supports userId for linking transactions to accounts
    */
   async createPaymentIntent(
     amount: number, 
     currency: string, 
-    metadata?: { mobile: string, productId: number, type: string },
-    idempotencyKey?: string // 👈 Accepted here
+    metadata?: { 
+      mobile: string; 
+      productId: number; 
+      type: string;
+      userId?: string; // Optional user ID for logged-in users
+    },
+    idempotencyKey?: string
   ) {
     try {
       const amountInCents = Math.round(amount * 100);
@@ -50,11 +56,12 @@ export const paymentService = {
           metadata: {
             mobile: metadata?.mobile || '',
             productId: metadata?.productId?.toString() || '',
-            type: metadata?.type || ''
+            type: metadata?.type || '',
+            userId: metadata?.userId || '' // Store user ID in payment metadata
           }
         },
         {
-          idempotencyKey // 👈 Passed to Stripe
+          idempotencyKey
         }
       );
 
@@ -90,3 +97,4 @@ export const paymentService = {
     }
   }
 };
+

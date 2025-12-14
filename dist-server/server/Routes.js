@@ -1,4 +1,5 @@
 "use strict";
+// server/Routes.ts
 var __assign = (this && this.__assign) || function () {
     __assign = Object.assign || function(t) {
         for (var s, i = 1, n = arguments.length; i < n; i++) {
@@ -59,23 +60,27 @@ var node_cron_1 = __importDefault(require("node-cron"));
 var express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 var helmet_1 = __importDefault(require("helmet"));
 var zod_1 = require("zod");
+// Middleware
 var ipWhitelist_1 = require("./middleware/ipWhitelist");
 var basicAuth_1 = require("./middleware/basicAuth");
+var auth_1 = require("./middleware/auth");
+// Services
 var dtone_1 = require("./dtone");
 var sync_countries_1 = require("./scripts/sync-countries");
 var sync_operators_1 = require("./scripts/sync-operators");
 var sync_products_1 = require("./scripts/sync-products");
 var payment_1 = require("./payment");
+var auth_2 = require("./auth");
+var priceVerification_1 = require("./priceVerification");
 var db_1 = require("./db");
 var app = (0, express_1.default)();
-// Trust Proxy (Fixes the rate-limit error)
+// Trust Proxy
 app.set('trust proxy', 1);
 var PORT = process.env.PORT || 5000;
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
 // ==================================================================
 // 🔒 SECURITY CONFIGURATION
 // ==================================================================
-// 1. Helmet - Content Security Policy
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: {
         directives: {
@@ -88,11 +93,9 @@ app.use((0, helmet_1.default)({
         }
     }
 }));
-// 2. Determine Allowed Origins
 var allowedOrigins = process.env.NODE_ENV === 'production'
     ? (((_a = process.env.ALLOWED_ORIGINS) === null || _a === void 0 ? void 0 : _a.split(',').map(function (o) { return o.trim(); })) || [])
     : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
-// 3. Helper to validate Origin
 var isValidOrigin = function (origin) {
     try {
         var url = new URL(origin);
@@ -105,7 +108,6 @@ var isValidOrigin = function (origin) {
         return false;
     }
 };
-// 4. Strict CORS Middleware
 app.use((0, cors_1.default)({
     origin: function (origin, callback) {
         if (!origin)
@@ -122,7 +124,6 @@ app.use((0, cors_1.default)({
     maxAge: 86400
 }));
 console.log("\uD83D\uDD12 CORS Configured. Environment: ".concat(process.env.NODE_ENV));
-// 5. Rate Limiter
 var apiLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: 100,
@@ -131,20 +132,25 @@ var apiLimiter = (0, express_rate_limit_1.default)({
     validate: { xForwardedForHeader: false },
     message: { error: "Too many requests, please try again later." }
 });
+// Stricter rate limit for auth endpoints
+var authLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 10, // Only 10 auth attempts per 15 minutes
+    message: { error: "Too many login attempts. Please try again later." }
+});
 app.use('/api/', apiLimiter);
-// ✅ SECURITY: Webhook Replay Protection Set
 var processedWebhooks = new Set();
 // ==================================================================
 // 🧩 UNIFIED PURCHASE LOGIC
 // ==================================================================
 function processPurchase(data_1) {
     return __awaiter(this, arguments, void 0, function (data, source) {
-        var paymentId, mobile, productId, amount, currency, type, existing, err_1, check, callbackUrl, result, refund, statusId, dbStatus;
+        var paymentId, mobile, productId, amount, currency, type, userId, existing, err_1, check, callbackUrl, result, refund, statusId, dbStatus;
         if (source === void 0) { source = 'API'; }
         return __generator(this, function (_a) {
             switch (_a.label) {
                 case 0:
-                    paymentId = data.paymentId, mobile = data.mobile, productId = data.productId, amount = data.amount, currency = data.currency, type = data.type;
+                    paymentId = data.paymentId, mobile = data.mobile, productId = data.productId, amount = data.amount, currency = data.currency, type = data.type, userId = data.userId;
                     return [4 /*yield*/, db_1.db.transaction.findUnique({
                             where: { paymentIntentId: paymentId }
                         })];
@@ -179,12 +185,13 @@ function processPurchase(data_1) {
                                 currency: currency,
                                 productType: type,
                                 status: 'PENDING',
-                                processedVia: source
+                                processedVia: source,
+                                userId: userId || null // Link to user if logged in
                             }
                         })];
                 case 3:
                     _a.sent();
-                    console.log("[Purchase] \uD83D\uDD12 Lock acquired via ".concat(source, ": ").concat(paymentId));
+                    console.log("[Purchase] \uD83D\uDD12 Lock acquired via ".concat(source, ": ").concat(paymentId).concat(userId ? " (User: ".concat(userId, ")") : ' (Guest)'));
                     return [3 /*break*/, 7];
                 case 4:
                     err_1 = _a.sent();
@@ -284,7 +291,6 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                     console.error("Webhook Signature Error: ".concat(err.message));
                     return [2 /*return*/, res.status(400).send("Webhook Error: ".concat(err.message))];
                 }
-                // Replay protection
                 if (processedWebhooks.has(event.id)) {
                     console.log("[Webhook] \u26A0\uFE0F Duplicate event ".concat(event.id, ", ignoring."));
                     return [2 /*return*/, res.json({ received: true })];
@@ -306,7 +312,6 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                     console.log("[Webhook] \u23ED\uFE0F Already finalized: ".concat(paymentIntent.id));
                     return [2 /*return*/, res.json({ received: true })];
                 }
-                // Give API 30 seconds head start before webhook takes over
                 if ((existing === null || existing === void 0 ? void 0 : existing.processedVia) === 'API' && existing.status === 'PENDING') {
                     ageMs = Date.now() - new Date(existing.createdAt).getTime();
                     if (ageMs < 30000) {
@@ -323,7 +328,8 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                         productId: Number(paymentIntent.metadata.productId),
                         amount: paymentIntent.amount / 100,
                         currency: paymentIntent.currency.toUpperCase(),
-                        type: paymentIntent.metadata.type || 'UNKNOWN'
+                        type: paymentIntent.metadata.type || 'UNKNOWN',
+                        userId: paymentIntent.metadata.userId || undefined
                     }, 'WEBHOOK')];
             case 3:
                 _a.sent();
@@ -427,8 +433,189 @@ var purchaseSchema = zod_1.z.object({
     paymentId: zod_1.z.string().startsWith("pi_", "Invalid Payment ID format"),
     type: zod_1.z.string().optional()
 });
+var registerSchema = zod_1.z.object({
+    email: zod_1.z.string().email("Invalid email format"),
+    password: zod_1.z.string().min(8, "Password must be at least 8 characters"),
+    name: zod_1.z.string().min(1).optional()
+});
+var loginSchema = zod_1.z.object({
+    email: zod_1.z.string().email("Invalid email format"),
+    password: zod_1.z.string().min(1, "Password is required")
+});
 // ==================================================================
-// API ROUTES
+// 🔐 AUTHENTICATION ROUTES
+// ==================================================================
+// Register
+app.post('/api/auth/register', authLimiter, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, email, password, name_1, result, error_2;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0:
+                _b.trys.push([0, 2, , 3]);
+                _a = registerSchema.parse(req.body), email = _a.email, password = _a.password, name_1 = _a.name;
+                return [4 /*yield*/, auth_2.authService.register(email, password, name_1)];
+            case 1:
+                result = _b.sent();
+                if (!result.success) {
+                    return [2 /*return*/, res.status(400).json({ error: result.error })];
+                }
+                return [2 /*return*/, res.status(201).json({
+                        message: 'Registration successful',
+                        user: result.user,
+                        token: result.token
+                    })];
+            case 2:
+                error_2 = _b.sent();
+                if (error_2 instanceof zod_1.z.ZodError) {
+                    return [2 /*return*/, res.status(400).json({
+                            error: 'Validation Error',
+                            details: error_2.issues.map(function (e) { return e.message; })
+                        })];
+                }
+                console.error('[Auth] Register error:', error_2);
+                return [2 /*return*/, res.status(500).json({ error: 'Registration failed' })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); });
+// Login
+app.post('/api/auth/login', authLimiter, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, email, password, result, error_3;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0:
+                _b.trys.push([0, 2, , 3]);
+                _a = loginSchema.parse(req.body), email = _a.email, password = _a.password;
+                return [4 /*yield*/, auth_2.authService.login(email, password)];
+            case 1:
+                result = _b.sent();
+                if (!result.success) {
+                    return [2 /*return*/, res.status(401).json({ error: result.error })];
+                }
+                return [2 /*return*/, res.json({
+                        message: 'Login successful',
+                        user: result.user,
+                        token: result.token
+                    })];
+            case 2:
+                error_3 = _b.sent();
+                if (error_3 instanceof zod_1.z.ZodError) {
+                    return [2 /*return*/, res.status(400).json({
+                            error: 'Validation Error',
+                            details: error_3.issues.map(function (e) { return e.message; })
+                        })];
+                }
+                console.error('[Auth] Login error:', error_3);
+                return [2 /*return*/, res.status(500).json({ error: 'Login failed' })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); });
+// Get Current User (Protected)
+app.get('/api/auth/me', auth_1.requireAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        return [2 /*return*/, res.json({ user: req.user })];
+    });
+}); });
+// Update Profile (Protected)
+app.put('/api/auth/profile', auth_1.requireAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, name_2, phone, result, error_4;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0:
+                _b.trys.push([0, 2, , 3]);
+                _a = req.body, name_2 = _a.name, phone = _a.phone;
+                return [4 /*yield*/, auth_2.authService.updateProfile(req.user.id, { name: name_2, phone: phone })];
+            case 1:
+                result = _b.sent();
+                if (!result.success) {
+                    return [2 /*return*/, res.status(400).json({ error: result.error })];
+                }
+                return [2 /*return*/, res.json({ user: result.user })];
+            case 2:
+                error_4 = _b.sent();
+                console.error('[Auth] Update profile error:', error_4);
+                return [2 /*return*/, res.status(500).json({ error: 'Failed to update profile' })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); });
+// Change Password (Protected)
+app.post('/api/auth/change-password', auth_1.requireAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, currentPassword, newPassword, result, error_5;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0:
+                _b.trys.push([0, 2, , 3]);
+                _a = req.body, currentPassword = _a.currentPassword, newPassword = _a.newPassword;
+                if (!currentPassword || !newPassword) {
+                    return [2 /*return*/, res.status(400).json({ error: 'Current and new password required' })];
+                }
+                return [4 /*yield*/, auth_2.authService.changePassword(req.user.id, currentPassword, newPassword)];
+            case 1:
+                result = _b.sent();
+                if (!result.success) {
+                    return [2 /*return*/, res.status(400).json({ error: result.error })];
+                }
+                return [2 /*return*/, res.json({ message: 'Password changed successfully' })];
+            case 2:
+                error_5 = _b.sent();
+                console.error('[Auth] Change password error:', error_5);
+                return [2 /*return*/, res.status(500).json({ error: 'Failed to change password' })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); });
+// Get User's Transaction History (Protected)
+app.get('/api/user/transactions', auth_1.requireAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var page, limit, skip, _a, transactions, total, error_6;
+    return __generator(this, function (_b) {
+        switch (_b.label) {
+            case 0:
+                _b.trys.push([0, 2, , 3]);
+                page = parseInt(req.query.page) || 1;
+                limit = Math.min(parseInt(req.query.limit) || 20, 50);
+                skip = (page - 1) * limit;
+                return [4 /*yield*/, Promise.all([
+                        db_1.db.transaction.findMany({
+                            where: { userId: req.user.id },
+                            orderBy: { createdAt: 'desc' },
+                            skip: skip,
+                            take: limit,
+                            select: {
+                                id: true,
+                                mobile: true,
+                                amount: true,
+                                currency: true,
+                                status: true,
+                                productType: true,
+                                createdAt: true,
+                                externalId: true
+                            }
+                        }),
+                        db_1.db.transaction.count({ where: { userId: req.user.id } })
+                    ])];
+            case 1:
+                _a = _b.sent(), transactions = _a[0], total = _a[1];
+                return [2 /*return*/, res.json({
+                        transactions: transactions,
+                        pagination: {
+                            page: page,
+                            limit: limit,
+                            total: total,
+                            pages: Math.ceil(total / limit)
+                        }
+                    })];
+            case 2:
+                error_6 = _b.sent();
+                console.error('[User] Get transactions error:', error_6);
+                return [2 /*return*/, res.status(500).json({ error: 'Failed to get transactions' })];
+            case 3: return [2 /*return*/];
+        }
+    });
+}); });
+// ==================================================================
+// PUBLIC API ROUTES
 // ==================================================================
 app.get('/api/countries', function (_req, res) { return res.json(COUNTRY_CACHE); });
 app.get('/api/operators', function (req, res) {
@@ -439,7 +626,7 @@ app.get('/api/operators', function (req, res) {
     return res.json(OPERATOR_CACHE);
 });
 app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, operatorId, currency_1, ranged, opId, whereClause, localProducts, mapped, result, apiProducts, error_2;
+    var _a, operatorId, currency_1, ranged, opId, whereClause, localProducts, mapped, result, apiProducts, error_7;
     return __generator(this, function (_b) {
         switch (_b.label) {
             case 0:
@@ -487,40 +674,15 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
                     apiProducts = apiProducts.filter(function (p) { return p.type.includes('RANGED'); });
                 return [2 /*return*/, res.json(apiProducts)];
             case 3:
-                error_2 = _b.sent();
-                console.error('Error fetching products:', error_2);
-                return [2 /*return*/, res.status(500).json({ error: error_2.message })];
-            case 4: return [2 /*return*/];
-        }
-    });
-}); });
-app.post('/api/create-payment-intent', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, amount, currency, mobile, productId, type, idempotencyKey, result, error_3;
-    return __generator(this, function (_b) {
-        switch (_b.label) {
-            case 0:
-                _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
-                idempotencyKey = req.headers['idempotency-key'];
-                if (!amount || !currency)
-                    return [2 /*return*/, res.status(400).json({ error: 'Amount and currency are required' })];
-                _b.label = 1;
-            case 1:
-                _b.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency, { mobile: mobile, productId: productId, type: type }, idempotencyKey)];
-            case 2:
-                result = _b.sent();
-                res.json(result);
-                return [3 /*break*/, 4];
-            case 3:
-                error_3 = _b.sent();
-                res.status(500).json({ error: error_3.message });
-                return [3 /*break*/, 4];
+                error_7 = _b.sent();
+                console.error('Error fetching products:', error_7);
+                return [2 /*return*/, res.status(500).json({ error: error_7.message })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var mobile, result, error_4;
+    var mobile, result, error_8;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -537,27 +699,75 @@ app.post('/api/lookup', function (req, res) { return __awaiter(void 0, void 0, v
                     return [2 /*return*/, res.status(404).json({ error: result.error, code: result.code })];
                 return [2 /*return*/, res.json(result.data)];
             case 3:
-                error_4 = _a.sent();
-                return [2 /*return*/, res.status(500).json({ error: error_4.message })];
+                error_8 = _a.sent();
+                return [2 /*return*/, res.status(500).json({ error: error_8.message })];
             case 4: return [2 /*return*/];
         }
     });
 }); });
 // ==================================================================
-// API PURCHASE (PRIMARY)
+// PAYMENT INTENT (with Price Verification) - Supports Guest + User
 // ==================================================================
-app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var cleanData, productId, mobile, amount, unit, paymentId, type, paymentIntent, paidProductId, result, error_5;
-    var _a;
-    return __generator(this, function (_b) {
-        switch (_b.label) {
+app.post('/api/create-payment-intent', auth_1.optionalAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var _a, amount, currency, mobile, productId, type, idempotencyKey, priceCheck, result, error_9;
+    var _b, _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
             case 0:
-                _b.trys.push([0, 3, , 4]);
+                _a = req.body, amount = _a.amount, currency = _a.currency, mobile = _a.mobile, productId = _a.productId, type = _a.type;
+                idempotencyKey = req.headers['idempotency-key'];
+                if (!amount || !currency || !productId) {
+                    return [2 /*return*/, res.status(400).json({ error: 'Amount, currency, and productId are required' })];
+                }
+                _d.label = 1;
+            case 1:
+                _d.trys.push([1, 4, , 5]);
+                return [4 /*yield*/, priceVerification_1.priceVerificationService.verifyProductPrice(productId, amount, currency)];
+            case 2:
+                priceCheck = _d.sent();
+                if (!priceCheck.valid && priceCheck.code !== 'CACHE_MISS' && priceCheck.code !== 'NO_PRICE') {
+                    console.warn("[Security] \uD83D\uDEA8 Price verification failed: ".concat(priceCheck.error));
+                    return [2 /*return*/, res.status(400).json({
+                            error: priceCheck.error,
+                            code: priceCheck.code,
+                            expectedPrice: priceCheck.expectedPrice,
+                            expectedCurrency: priceCheck.expectedCurrency
+                        })];
+                }
+                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(amount, currency, {
+                        mobile: mobile,
+                        productId: productId,
+                        type: type,
+                        userId: (_b = req.user) === null || _b === void 0 ? void 0 : _b.id // Include user ID in metadata if logged in
+                    }, idempotencyKey)];
+            case 3:
+                result = _d.sent();
+                // Return user status along with payment intent
+                res.json(__assign(__assign({}, result), { isGuest: !req.user, userId: (_c = req.user) === null || _c === void 0 ? void 0 : _c.id }));
+                return [3 /*break*/, 5];
+            case 4:
+                error_9 = _d.sent();
+                res.status(500).json({ error: error_9.message });
+                return [3 /*break*/, 5];
+            case 5: return [2 /*return*/];
+        }
+    });
+}); });
+// ==================================================================
+// API PURCHASE (PRIMARY) - Supports Guest + User
+// ==================================================================
+app.post('/api/purchase', auth_1.optionalAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
+    var cleanData, productId, mobile, amount, unit, paymentId, type, paymentIntent, paidProductId, paidAmount, paidCurrency, priceCheck, userId, result, error_10;
+    var _a, _b, _c;
+    return __generator(this, function (_d) {
+        switch (_d.label) {
+            case 0:
+                _d.trys.push([0, 4, , 5]);
                 cleanData = purchaseSchema.parse(req.body);
                 productId = cleanData.productId, mobile = cleanData.mobile, amount = cleanData.amount, unit = cleanData.unit, paymentId = cleanData.paymentId, type = cleanData.type;
                 return [4 /*yield*/, stripe.paymentIntents.retrieve(paymentId)];
             case 1:
-                paymentIntent = _b.sent();
+                paymentIntent = _d.sent();
                 if (paymentIntent.status !== 'succeeded') {
                     console.warn("[Security] \uD83D\uDEA8 Unpaid Intent: ".concat(paymentId));
                     return [2 /*return*/, res.status(403).json({ error: 'Payment not completed.' })];
@@ -567,28 +777,40 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
                     console.warn("[Security] \uD83D\uDEA8 Product mismatch: paid=".concat(paidProductId, ", requested=").concat(productId));
                     return [2 /*return*/, res.status(403).json({ error: 'Product mismatch.' })];
                 }
+                paidAmount = paymentIntent.amount / 100;
+                paidCurrency = paymentIntent.currency.toUpperCase();
+                return [4 /*yield*/, priceVerification_1.priceVerificationService.verifyProductPrice(productId, paidAmount, paidCurrency)];
+            case 2:
+                priceCheck = _d.sent();
+                if (!priceCheck.valid && priceCheck.code !== 'CACHE_MISS' && priceCheck.code !== 'NO_PRICE') {
+                    console.warn("[Security] \uD83D\uDEA8 Purchase price mismatch: paid ".concat(paidAmount, " ").concat(paidCurrency, ", expected ").concat(priceCheck.expectedPrice, " ").concat(priceCheck.expectedCurrency));
+                    // Don't block - payment already succeeded, but log it
+                    // In production, you might want to flag this for review
+                }
+                userId = ((_b = req.user) === null || _b === void 0 ? void 0 : _b.id) || ((_c = paymentIntent.metadata) === null || _c === void 0 ? void 0 : _c.userId) || undefined;
                 return [4 /*yield*/, processPurchase({
                         paymentId: paymentId,
                         mobile: mobile,
                         productId: productId,
-                        amount: amount,
-                        currency: unit || 'UNKNOWN',
-                        type: type || 'UNKNOWN'
+                        amount: paidAmount,
+                        currency: unit || paidCurrency,
+                        type: type || 'UNKNOWN',
+                        userId: userId
                     }, 'API')];
-            case 2:
-                result = _b.sent();
-                return [2 /*return*/, res.json(result)];
             case 3:
-                error_5 = _b.sent();
-                if (error_5 instanceof zod_1.z.ZodError) {
+                result = _d.sent();
+                return [2 /*return*/, res.json(__assign(__assign({}, result), { isGuest: !userId }))];
+            case 4:
+                error_10 = _d.sent();
+                if (error_10 instanceof zod_1.z.ZodError) {
                     return [2 /*return*/, res.status(400).json({
                             error: 'Validation Error',
-                            details: error_5.issues.map(function (e) { return e.message; })
+                            details: error_10.issues.map(function (e) { return e.message; })
                         })];
                 }
-                console.error("Purchase API Error:", error_5);
+                console.error("Purchase API Error:", error_10);
                 return [2 /*return*/, res.status(500).json({ success: false, error: 'Internal server error' })];
-            case 4: return [2 /*return*/];
+            case 5: return [2 /*return*/];
         }
     });
 }); });
@@ -596,7 +818,7 @@ app.post('/api/purchase', function (req, res) { return __awaiter(void 0, void 0,
 // TRANSACTION STATUS CHECK
 // ==================================================================
 app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var paymentId, txn, error_6;
+    var paymentId, txn, error_11;
     return __generator(this, function (_a) {
         switch (_a.label) {
             case 0:
@@ -613,9 +835,9 @@ app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(vo
                     return [2 /*return*/, res.json({ status: 'PENDING' })];
                 return [2 /*return*/, res.json({ status: txn.status, externalId: txn.externalId })];
             case 3:
-                error_6 = _a.sent();
-                console.error("Status Check Error:", error_6);
-                return [2 /*return*/, res.status(500).json({ error: error_6.message })];
+                error_11 = _a.sent();
+                console.error("Status Check Error:", error_11);
+                return [2 /*return*/, res.status(500).json({ error: error_11.message })];
             case 4: return [2 /*return*/];
         }
     });
@@ -624,7 +846,7 @@ app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(vo
 // DTONE WEBHOOK (with IP + Basic Auth)
 // ==================================================================
 app.post('/api/hooks/dtone', ipWhitelist_1.dtoneIpWhitelist, basicAuth_1.dtoneBasicAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, external_id, status, txn, statusId, error_7;
+    var _a, external_id, status, txn, statusId, error_12;
     var _b, _c;
     return __generator(this, function (_d) {
         switch (_d.label) {
@@ -674,8 +896,8 @@ app.post('/api/hooks/dtone', ipWhitelist_1.dtoneIpWhitelist, basicAuth_1.dtoneBa
                 res.status(200).send('OK');
                 return [3 /*break*/, 9];
             case 8:
-                error_7 = _d.sent();
-                console.error('[DTOne Callback] Error:', error_7);
+                error_12 = _d.sent();
+                console.error('[DTOne Callback] Error:', error_12);
                 res.status(500).send('Internal error');
                 return [3 /*break*/, 9];
             case 9: return [2 /*return*/];

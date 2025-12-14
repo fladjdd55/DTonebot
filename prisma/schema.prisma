@@ -7,38 +7,70 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Transaction {
-  id              String   @id @default(uuid())
-  externalId      String   @unique
-  paymentIntentId String?  @unique
-  paymentId       String?    
+// ==================================================================
+// USER MODEL (For Authentication)
+// ==================================================================
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String?
+  phone        String?  // Optional saved phone number
   
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+  
+  // Relations
+  transactions Transaction[]
+}
+
+// ==================================================================
+// TRANSACTION MODEL
+// ==================================================================
+model Transaction {
+  id              Int      @id @default(autoincrement())
+  
+  // DTOne Reference
+  externalId      String   @unique
+  
+  // Payment Reference
+  paymentIntentId String?  @unique
+  paymentId       String?
+  
+  // Transaction Details
   mobile          String
   productId       Int
-  productType     String    
   amount          Float
   currency        String
-  status          String
-  processedVia    String?  // "API" or "WEBHOOK" - tracks who handled it
-
+  productType     String?
+  
+  // Status Tracking
+  status          String   @default("PENDING") // PENDING, COMPLETED, FAILED, REFUNDED, REFUND_FAILED
+  processedVia    String?  // "API" or "WEBHOOK" - tracks which processor handled it
+  
+  // User Association (null for guest checkout)
+  userId          String?
+  user            User?    @relation(fields: [userId], references: [id])
+  
+  // Timestamps
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
+// ==================================================================
+// PRODUCT MODEL (Cached from DTOne)
+// ==================================================================
 model Product {
-  id            Int      @id 
-  name          String
-  description   String?
-  type          String   
-  serviceId     Int
-  operatorId    Int
+  id          Int      @id
+  name        String
+  type        String
+  serviceId   Int
+  operatorId  Int
+  currency    String
+  amount      Float?
+  minAmount   Float?
+  maxAmount   Float?
   
-  // Pricing & Value
-  amount        Float?
-  currency      String
-  minAmount     Float?   
-  maxAmount     Float?
-  updatedAt     DateTime @updatedAt
-
-  @@index([operatorId]) 
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

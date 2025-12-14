@@ -1,3 +1,5 @@
+// server/Routes.ts
+
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path'; 
@@ -6,18 +8,25 @@ import cron from 'node-cron';
 import rateLimit from 'express-rate-limit'; 
 import helmet from 'helmet'; 
 import { z } from 'zod';
+
+// Middleware
 import { dtoneIpWhitelist } from './middleware/ipWhitelist';
 import { dtoneBasicAuth } from './middleware/basicAuth';
+import { requireAuth, optionalAuth } from './middleware/auth';
+
+// Services
 import { dtoneService } from './dtone';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators'; 
 import { syncProducts } from './scripts/sync-products'; 
 import { paymentService } from './payment'; 
+import { authService } from './auth';
+import { priceVerificationService } from './priceVerification';
 import { db } from './db'; 
 
 const app = express();
 
-// Trust Proxy (Fixes the rate-limit error)
+// Trust Proxy
 app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5000;
@@ -27,7 +36,6 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '20
 // 🔒 SECURITY CONFIGURATION
 // ==================================================================
 
-// 1. Helmet - Content Security Policy
 app.use(helmet({
   contentSecurityPolicy: {
     directives: {
@@ -41,12 +49,10 @@ app.use(helmet({
   }
 }));
 
-// 2. Determine Allowed Origins
 const allowedOrigins = process.env.NODE_ENV === 'production'
   ? (process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [])
   : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
 
-// 3. Helper to validate Origin
 const isValidOrigin = (origin: string): boolean => {
   try {
     const url = new URL(origin);
@@ -59,7 +65,6 @@ const isValidOrigin = (origin: string): boolean => {
   }
 };
 
-// 4. Strict CORS Middleware
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
@@ -76,7 +81,6 @@ app.use(cors({
 
 console.log(`🔒 CORS Configured. Environment: ${process.env.NODE_ENV}`);
 
-// 5. Rate Limiter
 const apiLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, 
   max: 100,
@@ -86,9 +90,15 @@ const apiLimiter = rateLimit({
   message: { error: "Too many requests, please try again later." }
 });
 
+// Stricter rate limit for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // Only 10 auth attempts per 15 minutes
+  message: { error: "Too many login attempts. Please try again later." }
+});
+
 app.use('/api/', apiLimiter); 
 
-// ✅ SECURITY: Webhook Replay Protection Set
 const processedWebhooks = new Set<string>();
 
 // ==================================================================
@@ -102,12 +112,13 @@ async function processPurchase(
     productId: number;
     amount: number;
     currency: string;
-    type: string
+    type: string;
+    userId?: string; // Optional user ID for logged-in users
   },
   source: 'API' | 'WEBHOOK' = 'API'
 ): Promise<any> {
 
-  const { paymentId, mobile, productId, amount, currency, type } = data;
+  const { paymentId, mobile, productId, amount, currency, type, userId } = data;
 
   // 1. Check if already processed
   const existing = await db.transaction.findUnique({
@@ -145,10 +156,11 @@ async function processPurchase(
           currency,
           productType: type,
           status: 'PENDING',
-          processedVia: source
+          processedVia: source,
+          userId: userId || null // Link to user if logged in
         }
       });
-      console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
+      console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}${userId ? ` (User: ${userId})` : ' (Guest)'}`);
     } catch (err: any) {
       if (err.code === 'P2002') {
         console.log(`[Purchase] ⚠️ Lock conflict for ${paymentId}, checking status...`);
@@ -247,7 +259,6 @@ app.post('/api/hooks/stripe',
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Replay protection
     if (processedWebhooks.has(event.id)) {
       console.log(`[Webhook] ⚠️ Duplicate event ${event.id}, ignoring.`);
       return res.json({ received: true });
@@ -260,7 +271,6 @@ app.post('/api/hooks/stripe',
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         console.log(`[Webhook] Payment Succeeded: ${paymentIntent.id}`);
 
-        // Check if API already handled this
         const existing = await db.transaction.findUnique({
           where: { paymentIntentId: paymentIntent.id }
         });
@@ -270,7 +280,6 @@ app.post('/api/hooks/stripe',
           return res.json({ received: true });
         }
 
-        // Give API 30 seconds head start before webhook takes over
         if (existing?.processedVia === 'API' && existing.status === 'PENDING') {
           const ageMs = Date.now() - new Date(existing.createdAt).getTime();
           if (ageMs < 30000) {
@@ -280,7 +289,6 @@ app.post('/api/hooks/stripe',
           console.log(`[Webhook] ⚠️ API seems stuck, taking over: ${paymentIntent.id}`);
         }
 
-        // Process as fallback
         if (!existing || existing.status === 'PENDING') {
           console.log(`[Webhook] 🔄 Processing payment: ${paymentIntent.id}`);
           await processPurchase({
@@ -289,7 +297,8 @@ app.post('/api/hooks/stripe',
             productId: Number(paymentIntent.metadata.productId),
             amount: paymentIntent.amount / 100,
             currency: paymentIntent.currency.toUpperCase(),
-            type: paymentIntent.metadata.type || 'UNKNOWN'
+            type: paymentIntent.metadata.type || 'UNKNOWN',
+            userId: paymentIntent.metadata.userId || undefined
           }, 'WEBHOOK');
         }
       }
@@ -353,8 +362,171 @@ const purchaseSchema = z.object({
   type: z.string().optional()
 });
 
+const registerSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  password: z.string().min(8, "Password must be at least 8 characters"),
+  name: z.string().min(1).optional()
+});
+
+const loginSchema = z.object({
+  email: z.string().email("Invalid email format"),
+  password: z.string().min(1, "Password is required")
+});
+
 // ==================================================================
-// API ROUTES
+// 🔐 AUTHENTICATION ROUTES
+// ==================================================================
+
+// Register
+app.post('/api/auth/register', authLimiter, async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { email, password, name } = registerSchema.parse(req.body);
+    
+    const result = await authService.register(email, password, name);
+    
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    
+    return res.status(201).json({
+      message: 'Registration successful',
+      user: result.user,
+      token: result.token
+    });
+    
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        details: error.issues.map(e => e.message)
+      });
+    }
+    console.error('[Auth] Register error:', error);
+    return res.status(500).json({ error: 'Registration failed' });
+  }
+});
+
+// Login
+app.post('/api/auth/login', authLimiter, async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { email, password } = loginSchema.parse(req.body);
+    
+    const result = await authService.login(email, password);
+    
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+    
+    return res.json({
+      message: 'Login successful',
+      user: result.user,
+      token: result.token
+    });
+    
+  } catch (error: any) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({
+        error: 'Validation Error',
+        details: error.issues.map(e => e.message)
+      });
+    }
+    console.error('[Auth] Login error:', error);
+    return res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+// Get Current User (Protected)
+app.get('/api/auth/me', requireAuth, async (req: Request, res: Response): Promise<any> => {
+  return res.json({ user: req.user });
+});
+
+// Update Profile (Protected)
+app.put('/api/auth/profile', requireAuth, async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { name, phone } = req.body;
+    
+    const result = await authService.updateProfile(req.user!.id, { name, phone });
+    
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    
+    return res.json({ user: result.user });
+    
+  } catch (error: any) {
+    console.error('[Auth] Update profile error:', error);
+    return res.status(500).json({ error: 'Failed to update profile' });
+  }
+});
+
+// Change Password (Protected)
+app.post('/api/auth/change-password', requireAuth, async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current and new password required' });
+    }
+    
+    const result = await authService.changePassword(req.user!.id, currentPassword, newPassword);
+    
+    if (!result.success) {
+      return res.status(400).json({ error: result.error });
+    }
+    
+    return res.json({ message: 'Password changed successfully' });
+    
+  } catch (error: any) {
+    console.error('[Auth] Change password error:', error);
+    return res.status(500).json({ error: 'Failed to change password' });
+  }
+});
+
+// Get User's Transaction History (Protected)
+app.get('/api/user/transactions', requireAuth, async (req: Request, res: Response): Promise<any> => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 20, 50);
+    const skip = (page - 1) * limit;
+    
+    const [transactions, total] = await Promise.all([
+      db.transaction.findMany({
+        where: { userId: req.user!.id },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+        select: {
+          id: true,
+          mobile: true,
+          amount: true,
+          currency: true,
+          status: true,
+          productType: true,
+          createdAt: true,
+          externalId: true
+        }
+      }),
+      db.transaction.count({ where: { userId: req.user!.id } })
+    ]);
+    
+    return res.json({
+      transactions,
+      pagination: {
+        page,
+        limit,
+        total,
+        pages: Math.ceil(total / limit)
+      }
+    });
+    
+  } catch (error: any) {
+    console.error('[User] Get transactions error:', error);
+    return res.status(500).json({ error: 'Failed to get transactions' });
+  }
+});
+
+// ==================================================================
+// PUBLIC API ROUTES
 // ==================================================================
 
 app.get('/api/countries', (_req: Request, res: Response): any => res.json(COUNTRY_CACHE));
@@ -416,25 +588,6 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   }
 });
 
-app.post('/api/create-payment-intent', async (req: Request, res: Response): Promise<any> => {
-  const { amount, currency, mobile, productId, type } = req.body; 
-  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
-
-  if (!amount || !currency) return res.status(400).json({ error: 'Amount and currency are required' });
-  
-  try {
-    const result = await paymentService.createPaymentIntent(
-      amount, 
-      currency, 
-      { mobile, productId, type },
-      idempotencyKey 
-    );
-    res.json(result);
-  } catch (error: any) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
 app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   const { mobile } = req.body;
   if (!mobile) return res.status(400).json({ error: 'Mobile number is required' });
@@ -448,9 +601,63 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
 });
 
 // ==================================================================
-// API PURCHASE (PRIMARY)
+// PAYMENT INTENT (with Price Verification) - Supports Guest + User
 // ==================================================================
-app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
+app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: Response): Promise<any> => {
+  const { amount, currency, mobile, productId, type } = req.body; 
+  const idempotencyKey = req.headers['idempotency-key'] as string | undefined;
+
+  if (!amount || !currency || !productId) {
+    return res.status(400).json({ error: 'Amount, currency, and productId are required' });
+  }
+
+  try {
+    // 🔒 PRICE VERIFICATION: Verify amount matches product price
+    const priceCheck = await priceVerificationService.verifyProductPrice(
+      productId,
+      amount,
+      currency
+    );
+
+    if (!priceCheck.valid && priceCheck.code !== 'CACHE_MISS' && priceCheck.code !== 'NO_PRICE') {
+      console.warn(`[Security] 🚨 Price verification failed: ${priceCheck.error}`);
+      return res.status(400).json({
+        error: priceCheck.error,
+        code: priceCheck.code,
+        expectedPrice: priceCheck.expectedPrice,
+        expectedCurrency: priceCheck.expectedCurrency
+      });
+    }
+
+    // Create payment intent with user ID if logged in
+    const result = await paymentService.createPaymentIntent(
+      amount, 
+      currency, 
+      { 
+        mobile, 
+        productId, 
+        type,
+        userId: req.user?.id // Include user ID in metadata if logged in
+      },
+      idempotencyKey 
+    );
+
+    // Return user status along with payment intent
+    res.json({
+      ...result,
+      isGuest: !req.user,
+      userId: req.user?.id
+    });
+    
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==================================================================
+// API PURCHASE (PRIMARY) - Supports Guest + User
+// ==================================================================
+app.post('/api/purchase', optionalAuth, async (req: Request, res: Response): Promise<any> => {
   try {
     const cleanData = purchaseSchema.parse(req.body);
     const { productId, mobile, amount, unit, paymentId, type } = cleanData;
@@ -469,17 +676,40 @@ app.post('/api/purchase', async (req: Request, res: Response): Promise<any> => {
       return res.status(403).json({ error: 'Product mismatch.' });
     }
 
+    // 🔒 PRICE VERIFICATION: Double-check payment amount matches product
+    const paidAmount = paymentIntent.amount / 100;
+    const paidCurrency = paymentIntent.currency.toUpperCase();
+
+    const priceCheck = await priceVerificationService.verifyProductPrice(
+      productId,
+      paidAmount,
+      paidCurrency
+    );
+
+    if (!priceCheck.valid && priceCheck.code !== 'CACHE_MISS' && priceCheck.code !== 'NO_PRICE') {
+      console.warn(`[Security] 🚨 Purchase price mismatch: paid ${paidAmount} ${paidCurrency}, expected ${priceCheck.expectedPrice} ${priceCheck.expectedCurrency}`);
+      // Don't block - payment already succeeded, but log it
+      // In production, you might want to flag this for review
+    }
+
+    // Get user ID from request or payment metadata
+    const userId = req.user?.id || paymentIntent.metadata?.userId || undefined;
+
     // Process (API is primary)
     const result = await processPurchase({
       paymentId,
       mobile,
       productId,
-      amount,
-      currency: unit || 'UNKNOWN',
-      type: type || 'UNKNOWN'
+      amount: paidAmount,
+      currency: unit || paidCurrency,
+      type: type || 'UNKNOWN',
+      userId
     }, 'API');
 
-    return res.json(result);
+    return res.json({
+      ...result,
+      isGuest: !userId
+    });
 
   } catch (error: any) {
     if (error instanceof z.ZodError) {
@@ -573,3 +803,4 @@ app.use(express.static(DIST_PATH));
 app.get(/(.*)/, (_req: Request, res: Response) => res.sendFile(path.join(DIST_PATH, 'index.html')));
 
 app.listen(Number(PORT), '0.0.0.0', () => console.log(`🚀 API Server running on port ${PORT}`));
+
