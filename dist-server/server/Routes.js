@@ -670,8 +670,8 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
                         max: p.maxAmount || 0,
                         subserviceId: p.serviceId,
                         benefits: [],
-                        costPrice: number,
-                        costCurrency: string,
+                        costPrice: p.costPrice,
+                        costCurrency: p.costCurrency,
                     }); });
                     return [2 /*return*/, res.json(mapped)];
                 }

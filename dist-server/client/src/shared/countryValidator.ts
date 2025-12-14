@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached)
- * Timestamp: 2025-12-14T19:57:35.689Z
+ * Timestamp: 2025-12-14T22:18:04.164Z
  * * DO NOT EDIT MANUALLY. Run 'npx ts-node server/scripts/sync-countries.ts' to update.
  */
 
@@ -710,12 +710,6 @@ export const COUNTRIES: Country[] = [
     "code": "RO",
     "iso3": "ROU",
     "dialCode": "+40"
-  },
-  {
-    "name": "Russia",
-    "code": "RU",
-    "iso3": "RUS",
-    "dialCode": "+7"
   },
   {
     "name": "Rwanda",

@@ -578,8 +578,8 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
         max: p.maxAmount || 0,
         subserviceId: p.serviceId,
         benefits: [],
-	costPrice?: number,
-        costCurrency?: string,
+	costPrice: p.costPrice,
+        costCurrency: p.costCurrency,
       }));
       return res.json(mapped);
     }
