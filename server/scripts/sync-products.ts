@@ -130,8 +130,8 @@ export async function syncProducts() {
                                 operatorId: op.id,
                                 currency: p.currency,
                                 amount: fixedAmount,
-                                minAmount: p.min, || null,
-                                maxAmount: p.max, || null,
+                                minAmount: p.min || null,
+                                maxAmount: p.max || null,
                                 // ✅ NEW: Save cost price
                                 costPrice: p.costPrice || null,
 				costPriceMin: p.costPriceMin || null,

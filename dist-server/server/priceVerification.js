@@ -36,19 +36,51 @@ var __generator = (this && this.__generator) || function (thisArg, body) {
         if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
     }
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.priceVerificationService = void 0;
 var db_1 = require("./db");
+var dotenv_1 = __importDefault(require("dotenv"));
+dotenv_1.default.config();
 // Tolerance for price comparison (handles floating point and minor variations)
 var PRICE_TOLERANCE_PERCENT = 0.01; // 1% tolerance
+// ✅ 1. Get Global Min from Env (Must match Frontend variable)
+var GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 0);
+// ✅ 2. Helper to calculate the adjusted minimum based on USD cost
+function getAdjustedMin(product) {
+    var min = product.minAmount || 0;
+    if (!product.type || !product.type.includes('RANGED')) {
+        return product.amount || 0;
+    }
+    // If currency is USD, enforce directly
+    if (product.currency === 'USD') {
+        return Math.max(min, GLOBAL_MIN_USD);
+    }
+    // If we have a Cost Price in USD, calculate the Local Currency equivalent
+    if (product.costPrice && product.costPrice > 0 && product.minAmount > 0) {
+        var isCostUsd = !product.costCurrency || product.costCurrency === 'USD';
+        if (isCostUsd) {
+            // Ratio: Cost (USD) / Local Currency Unit
+            // Example: Cost $1 for 100 HTG -> Ratio = 0.01
+            var impliedRate = product.minAmount / product.costPrice;
+            // Target Min (Local) = $5 / Ratio
+            // Example: 5 / 0.01 = 500 HTG
+            var minRequiredLocal = GLOBAL_MIN_USD * impliedRate;
+            return Math.max(min, minRequiredLocal);
+        }
+    }
+    return min;
+}
 exports.priceVerificationService = {
+    getAdjustedMin: getAdjustedMin,
     /**
      * Verify that the payment amount matches the product price
-     * Returns the expected price for the product
      */
     verifyProductPrice: function (productId, paidAmount, paidCurrency) {
         return __awaiter(this, void 0, void 0, function () {
-            var product, min, max, expectedPrice, tolerance, priceDiff, error_1;
+            var product, adjustedMin, max, expectedPrice, tolerance, priceDiff, error_1;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -56,35 +88,39 @@ exports.priceVerificationService = {
                         return [4 /*yield*/, db_1.db.product.findUnique({ where: { id: productId } })];
                     case 1:
                         product = _a.sent();
-                        // 2. If not in cache, fetch from DTOne API
+                        // 2. If not in cache, skip strict verification (or fetch from API)
                         if (!product) {
-                            console.log("[Price Check] Product ".concat(productId, " not in cache, fetching from API..."));
-                            // We need operator ID to fetch products, but we don't have it
-                            // So we'll do a broader search or trust the API for now
-                            // In production, you might want to cache all products more aggressively
+                            console.log("[Price Check] Product ".concat(productId, " not in cache."));
                             return [2 /*return*/, {
-                                    valid: true, // Allow if not in cache (trust frontend for now)
+                                    valid: true,
                                     error: 'Product not in cache - price verification skipped',
                                     code: 'CACHE_MISS'
                                 }];
                         }
-                        // 3. Handle RANGED products (custom amount)
+                        // 3. Handle RANGED products
                         if (product.type.includes('RANGED')) {
-                            min = product.minAmount || 0;
+                            adjustedMin = getAdjustedMin(product);
                             max = product.maxAmount || Infinity;
-                            if (paidAmount < min || paidAmount > max) {
-                                console.warn("[Price Check] \u274C Amount ".concat(paidAmount, " outside range [").concat(min, "-").concat(max, "] for product ").concat(productId));
+                            if (paidAmount < adjustedMin) {
+                                console.warn("[Price Check] \u274C Amount ".concat(paidAmount, " below adjusted min ").concat(adjustedMin, " (Global Min: $").concat(GLOBAL_MIN_USD, ")"));
                                 return [2 /*return*/, {
                                         valid: false,
-                                        expectedPrice: min,
+                                        expectedPrice: adjustedMin,
                                         expectedCurrency: product.currency,
-                                        error: "Amount must be between ".concat(min, " and ").concat(max, " ").concat(product.currency),
-                                        code: 'AMOUNT_OUT_OF_RANGE'
+                                        error: "Amount must be at least ".concat(adjustedMin.toFixed(2), " ").concat(product.currency),
+                                        code: 'AMOUNT_TOO_LOW'
                                     }];
                             }
-                            // Currency must match
+                            if (paidAmount > max) {
+                                return [2 /*return*/, {
+                                        valid: false,
+                                        expectedPrice: max,
+                                        expectedCurrency: product.currency,
+                                        error: "Amount must be at most ".concat(max, " ").concat(product.currency),
+                                        code: 'AMOUNT_TOO_HIGH'
+                                    }];
+                            }
                             if (paidCurrency.toUpperCase() !== product.currency.toUpperCase()) {
-                                console.warn("[Price Check] \u274C Currency mismatch: paid ".concat(paidCurrency, ", expected ").concat(product.currency));
                                 return [2 /*return*/, {
                                         valid: false,
                                         expectedCurrency: product.currency,
@@ -96,16 +132,9 @@ exports.priceVerificationService = {
                         }
                         expectedPrice = product.amount || 0;
                         if (expectedPrice === 0) {
-                            console.warn("[Price Check] \u26A0\uFE0F Product ".concat(productId, " has no price set"));
-                            return [2 /*return*/, {
-                                    valid: true, // Allow if no price set (data issue)
-                                    error: 'Product price not set',
-                                    code: 'NO_PRICE'
-                                }];
+                            return [2 /*return*/, { valid: true, error: 'Product price not set', code: 'NO_PRICE' }];
                         }
-                        // Currency must match
                         if (paidCurrency.toUpperCase() !== product.currency.toUpperCase()) {
-                            console.warn("[Price Check] \u274C Currency mismatch: paid ".concat(paidCurrency, ", expected ").concat(product.currency));
                             return [2 /*return*/, {
                                     valid: false,
                                     expectedPrice: expectedPrice,
@@ -117,7 +146,6 @@ exports.priceVerificationService = {
                         tolerance = expectedPrice * PRICE_TOLERANCE_PERCENT;
                         priceDiff = Math.abs(paidAmount - expectedPrice);
                         if (priceDiff > tolerance) {
-                            console.warn("[Price Check] \u274C Price mismatch: paid ".concat(paidAmount, ", expected ").concat(expectedPrice, " (diff: ").concat(priceDiff, ")"));
                             return [2 /*return*/, {
                                     valid: false,
                                     expectedPrice: expectedPrice,
@@ -126,16 +154,12 @@ exports.priceVerificationService = {
                                     code: 'PRICE_MISMATCH'
                                 }];
                         }
-                        console.log("[Price Check] \u2705 Price verified: ".concat(paidAmount, " ").concat(paidCurrency, " for product ").concat(productId));
+                        console.log("[Price Check] \u2705 Price verified: ".concat(paidAmount, " ").concat(paidCurrency));
                         return [2 /*return*/, { valid: true, expectedPrice: expectedPrice, expectedCurrency: product.currency }];
                     case 2:
                         error_1 = _a.sent();
                         console.error('[Price Check] Error:', error_1);
-                        return [2 /*return*/, {
-                                valid: false,
-                                error: 'Price verification failed',
-                                code: 'VERIFICATION_ERROR'
-                            }];
+                        return [2 /*return*/, { valid: false, error: 'Price verification failed', code: 'VERIFICATION_ERROR' }];
                     case 3: return [2 /*return*/];
                 }
             });
@@ -146,7 +170,7 @@ exports.priceVerificationService = {
      */
     getProductPrice: function (productId) {
         return __awaiter(this, void 0, void 0, function () {
-            var product, error_2;
+            var product, adjustedMin, error_2;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
@@ -157,11 +181,12 @@ exports.priceVerificationService = {
                         if (!product) {
                             return [2 /*return*/, { success: false, error: 'Product not found' }];
                         }
+                        adjustedMin = getAdjustedMin(product);
                         return [2 /*return*/, {
                                 success: true,
                                 price: product.amount || 0,
                                 currency: product.currency,
-                                min: product.minAmount || undefined,
+                                min: adjustedMin,
                                 max: product.maxAmount || undefined,
                                 type: product.type
                             }];

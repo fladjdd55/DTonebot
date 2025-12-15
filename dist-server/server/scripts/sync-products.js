@@ -64,7 +64,7 @@ var RETRY_DELAY = 10000; // Wait 10 seconds if we hit a 429 Error
 var sleep = function (ms) { return new Promise(function (r) { return setTimeout(r, ms); }); };
 function syncProducts() {
     return __awaiter(this, void 0, void 0, function () {
-        var key, currentCount, opList, attempts, res, limit_1, processedOps, productsSaved, tasks, results;
+        var key, currentCount, opList_1, attempts, res, limit_1, processedOps_1, productsSaved_1, tasks, error_1;
         var _this = this;
         return __generator(this, function (_a) {
             switch (_a.label) {
@@ -80,7 +80,7 @@ function syncProducts() {
                     console.log("\uD83D\uDD11 API Key loaded: ".concat(key.substring(0, 4), "..."));
                     _a.label = 1;
                 case 1:
-                    _a.trys.push([1, , 10, 11]);
+                    _a.trys.push([1, 10, 11, 12]);
                     // 2. Connect to DB
                     console.log('🗄️  Connecting to Database...');
                     return [4 /*yield*/, db_1.db.product.count()];
@@ -89,17 +89,17 @@ function syncProducts() {
                     console.log("   (Current products in DB: ".concat(currentCount, ")"));
                     // 3. Fetch Operators
                     console.log('📡 Connecting to DTOne to fetch operators...');
-                    opList = [];
+                    opList_1 = [];
                     attempts = 0;
                     _a.label = 3;
                 case 3:
-                    if (!(attempts < 3 && opList.length === 0)) return [3 /*break*/, 8];
+                    if (!(attempts < 3 && opList_1.length === 0)) return [3 /*break*/, 8];
                     attempts++;
                     return [4 /*yield*/, dtone_1.dtoneService.getAllOperators()];
                 case 4:
                     res = _a.sent();
                     if (!(res.success && res.data)) return [3 /*break*/, 5];
-                    opList = res.data;
+                    opList_1 = res.data;
                     return [3 /*break*/, 7];
                 case 5:
                     console.warn("\u26A0\uFE0F  Failed to fetch operators (Attempt ".concat(attempts, "). Retrying in 3s..."));
@@ -109,19 +109,19 @@ function syncProducts() {
                     _a.label = 7;
                 case 7: return [3 /*break*/, 3];
                 case 8:
-                    if (opList.length === 0) {
+                    if (opList_1.length === 0) {
                         console.error('❌ Failed to get operators. Aborting.');
                         return [2 /*return*/];
                     }
-                    console.log("\u2705 Found ".concat(opList.length, " operators."));
+                    console.log("\u2705 Found ".concat(opList_1.length, " operators."));
                     // 4. Process Operators (Sequential Safe Mode)
-                    console.log("\uD83D\uDD04 Fetching products for ".concat(opList.length, " operators..."));
+                    console.log("\uD83D\uDD04 Fetching products for ".concat(opList_1.length, " operators..."));
                     limit_1 = (0, p_limit_1.default)(CONCURRENCY);
-                    processedOps = 0;
-                    productsSaved = 0;
-                    tasks = opList.map(function (op) {
+                    processedOps_1 = 0;
+                    productsSaved_1 = 0;
+                    tasks = opList_1.map(function (op) {
                         return limit_1(function () { return __awaiter(_this, void 0, void 0, function () {
-                            var opSuccess, opRetries, apiRes, upsertPromises;
+                            var opSuccess, opRetries, apiRes, upsertPromises, results, err_1;
                             var _a;
                             return __generator(this, function (_b) {
                                 switch (_b.label) {
@@ -130,10 +130,10 @@ function syncProducts() {
                                         opRetries = 0;
                                         _b.label = 1;
                                     case 1:
-                                        if (!(!opSuccess && opRetries < 3)) return [3 /*break*/, 8];
+                                        if (!(!opSuccess && opRetries < 3)) return [3 /*break*/, 10];
                                         _b.label = 2;
                                     case 2:
-                                        _b.trys.push([2, , 6, 7]);
+                                        _b.trys.push([2, 8, , 9]);
                                         return [4 /*yield*/, dtone_1.dtoneService.getProductsForOperator(op.id, 1, 100, 'en')];
                                     case 3:
                                         apiRes = _b.sent();
@@ -148,90 +148,92 @@ function syncProducts() {
                                         // CASE 2: Other Error
                                         if (!apiRes.success) {
                                             opSuccess = true; // Treat as "done" so we don't retry forever on 404s
-                                            return [3 /*break*/, 8];
+                                            return [3 /*break*/, 10];
                                         }
-                                        // CASE 3: Success
-                                        if (apiRes.data && apiRes.data.length > 0) {
-                                            upsertPromises = apiRes.data.map(function (p) {
-                                                var fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
-                                                return db_1.db.product.upsert({
-                                                    where: { id: p.id },
-                                                    update: {
-                                                        name: p.name,
-                                                        amount: fixedAmount,
-                                                        minAmount: p.min,
-                                                        maxAmount: p.max,
-                                                        serviceId: p.subserviceId || 1,
-                                                        costPrice: p.costPrice || null,
-                                                        costPriceMin: p.costPriceMin || null,
-                                                        costPriceMax: p.costPriceMax || null,
-                                                        costCurrency: p.costCurrency || 'USD',
-                                                        updatedAt: new Date()
-                                                    },
-                                                    create: {
-                                                        id: p.id,
-                                                        name: p.name,
-                                                        type: p.type,
-                                                        serviceId: p.subserviceId || 1,
-                                                        operatorId: op.id,
-                                                        currency: p.currency,
-                                                        amount: fixedAmount,
-                                                        minAmount: p.min,
-                                                    } || null,
+                                        if (!(apiRes.data && apiRes.data.length > 0)) return [3 /*break*/, 7];
+                                        upsertPromises = apiRes.data.map(function (p) {
+                                            var fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                                            return db_1.db.product.upsert({
+                                                where: { id: p.id },
+                                                update: {
+                                                    name: p.name,
+                                                    amount: fixedAmount,
+                                                    minAmount: p.min,
                                                     maxAmount: p.max,
-                                                } || null, 
-                                                // ✅ NEW: Save cost price
-                                                costPrice, p.costPrice || null, costPriceMin, p.costPriceMin || null, costPriceMax, p.costPriceMax || null, costCurrency, p.costCurrency || 'USD');
+                                                    serviceId: p.subserviceId || 1,
+                                                    costPrice: p.costPrice || null,
+                                                    costPriceMin: p.costPriceMin || null,
+                                                    costPriceMax: p.costPriceMax || null,
+                                                    costCurrency: p.costCurrency || 'USD',
+                                                    updatedAt: new Date()
+                                                },
+                                                create: {
+                                                    id: p.id,
+                                                    name: p.name,
+                                                    type: p.type,
+                                                    serviceId: p.subserviceId || 1,
+                                                    operatorId: op.id,
+                                                    currency: p.currency,
+                                                    amount: fixedAmount,
+                                                    minAmount: p.min || null,
+                                                    maxAmount: p.max || null,
+                                                    // ✅ NEW: Save cost price
+                                                    costPrice: p.costPrice || null,
+                                                    costPriceMin: p.costPriceMin || null,
+                                                    costPriceMax: p.costPriceMax || null,
+                                                    costCurrency: p.costCurrency || 'USD'
+                                                }
+                                            }).catch(function (err) {
+                                                console.error("   \u274C Failed to save product ".concat(p.id, ":"), err.message);
+                                                return null;
                                             });
+                                        });
+                                        return [4 /*yield*/, Promise.all(upsertPromises)];
+                                    case 6:
+                                        results = _b.sent();
+                                        productsSaved_1 += results.filter(function (r) { return r !== null; }).length;
+                                        _b.label = 7;
+                                    case 7:
+                                        opSuccess = true;
+                                        return [3 /*break*/, 9];
+                                    case 8:
+                                        err_1 = _b.sent();
+                                        console.error("\u274C Crash on Op ".concat(op.id, ":"), err_1);
+                                        opSuccess = true;
+                                        return [3 /*break*/, 9];
+                                    case 9: return [3 /*break*/, 1];
+                                    case 10: 
+                                    // ✅ RATE LIMITING: Always wait a bit between operators
+                                    return [4 /*yield*/, sleep(RATE_LIMIT_DELAY)];
+                                    case 11:
+                                        // ✅ RATE LIMITING: Always wait a bit between operators
+                                        _b.sent();
+                                        processedOps_1++;
+                                        if (processedOps_1 % 5 === 0 || processedOps_1 === opList_1.length) {
+                                            console.log("   \uD83D\uDCDD Progress: ".concat(processedOps_1, "/").concat(opList_1.length, " operators checked. (Saved: ").concat(productsSaved_1, ")"));
                                         }
-                                        return [3 /*break*/, 7];
-                                    case 6: return [7 /*endfinally*/];
-                                    case 7: return [3 /*break*/, 1];
-                                    case 8: return [2 /*return*/];
+                                        return [2 /*return*/];
                                 }
                             });
-                        }); }).catch(function (err) {
-                            console.error("   \u274C Failed to save product ".concat(p.id, ":"), err.message);
-                            return null;
-                        });
+                        }); });
                     });
-                    return [4 /*yield*/, Promise.all(upsertPromises)];
+                    return [4 /*yield*/, Promise.all(tasks)];
                 case 9:
-                    results = _a.sent();
-                    productsSaved += results.filter(function (r) { return r !== null; }).length;
-                    return [3 /*break*/, 11];
-                case 10: return [7 /*endfinally*/];
-                case 11:
-                    opSuccess = true;
-                    return [2 /*return*/];
+                    _a.sent();
+                    console.log("\n\n\u2705 [Success] Sync Complete!");
+                    console.log("   - Operators Processed: ".concat(processedOps_1));
+                    console.log("   - Products Saved in DB: ".concat(productsSaved_1));
+                    console.log('==================================================\n');
+                    return [3 /*break*/, 12];
+                case 10:
+                    error_1 = _a.sent();
+                    console.error('\n❌ [Sync] Script Crashed:', error_1);
+                    return [3 /*break*/, 12];
+                case 11: return [7 /*endfinally*/];
+                case 12: return [2 /*return*/];
             }
         });
     });
-}
-try { }
-catch (err) {
-    console.error("\u274C Crash on Op ".concat(op.id, ":"), err);
-    opSuccess = true;
-}
-// ✅ RATE LIMITING: Always wait a bit between operators
-await sleep(RATE_LIMIT_DELAY);
-processedOps++;
-if (processedOps % 5 === 0 || processedOps === opList.length) {
-    console.log("   \uD83D\uDCDD Progress: ".concat(processedOps, "/").concat(opList.length, " operators checked. (Saved: ").concat(productsSaved, ")"));
-}
-;
-;
-await Promise.all(tasks);
-console.log("\n\n\u2705 [Success] Sync Complete!");
-console.log("   - Operators Processed: ".concat(processedOps));
-console.log("   - Products Saved in DB: ".concat(productsSaved));
-console.log('==================================================\n');
-try { }
-catch (error) {
-    console.error('\n❌ [Sync] Script Crashed:', error);
-}
-finally {
-    // await db.$disconnect();
 }
 if (require.main === module) {
     syncProducts();

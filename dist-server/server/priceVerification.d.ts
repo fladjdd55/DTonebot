@@ -5,10 +5,11 @@ export interface PriceVerificationResult {
     error?: string;
     code?: string;
 }
+declare function getAdjustedMin(product: any): number;
 export declare const priceVerificationService: {
+    getAdjustedMin: typeof getAdjustedMin;
     /**
      * Verify that the payment amount matches the product price
-     * Returns the expected price for the product
      */
     verifyProductPrice(productId: number, paidAmount: number, paidCurrency: string): Promise<PriceVerificationResult>;
     /**
@@ -24,3 +25,4 @@ export declare const priceVerificationService: {
         error?: string;
     }>;
 };
+export {};
