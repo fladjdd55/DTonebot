@@ -46,7 +46,7 @@ var dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 // Tolerance for price comparison (handles floating point and minor variations)
 var PRICE_TOLERANCE_PERCENT = 0.01; // 1% tolerance
-// ✅ 1. Get Global Min from Env (Must match Frontend variable)
+// ✅ 1. Get Global Min from Env (Defaults to 0 if not set)
 var GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 0);
 // ✅ 2. Helper to calculate the adjusted minimum based on USD cost
 function getAdjustedMin(product) {

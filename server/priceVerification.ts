@@ -8,7 +8,7 @@ dotenv.config();
 // Tolerance for price comparison (handles floating point and minor variations)
 const PRICE_TOLERANCE_PERCENT = 0.01; // 1% tolerance
 
-// ✅ 1. Get Global Min from Env (Must match Frontend variable)
+// ✅ 1. Get Global Min from Env (Defaults to 0 if not set)
 const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 0);
 
 export interface PriceVerificationResult {
