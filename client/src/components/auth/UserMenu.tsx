@@ -9,7 +9,10 @@ interface UserMenuProps {
 }
 
 export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick }: UserMenuProps) {
-  const { user, isAuthenticated, logout } = useAuth();
+  // ✅ FIX 1: 'isAuthenticated' is derived from user, not destructured
+  const { user, logout } = useAuth();
+  const isAuthenticated = !!user;
+  
   const [isOpen, setIsOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -45,7 +48,8 @@ export default function UserMenu({ onLoginClick, onHistoryClick, onProfileClick 
 
   // Authenticated - show user menu
   const initials = user?.name 
-    ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+    // ✅ FIX 2: Explicitly type 'n' as string
+    ? user.name.split(' ').map((n: string) => n[0]).join('').toUpperCase().slice(0, 2)
     : user?.email?.slice(0, 2).toUpperCase() || 'U';
 
   return (

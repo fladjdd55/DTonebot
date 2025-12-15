@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,20 +10,21 @@ datasource db {
 }
 
 // ==================================================================
-// USER MODEL (For Authentication)
+// USER MODEL (Updated)
 // ==================================================================
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
   passwordHash String
   name         String?
-  phone        String?  // Optional saved phone number
+  phone        String?
   
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
   
   // Relations
-  transactions Transaction[]
+  transactions  Transaction[]
+  refreshTokens RefreshToken[] // ✅ ADD THIS LINE (Fixes the error)
 }
 
 // ==================================================================
@@ -29,61 +32,53 @@ model User {
 // ==================================================================
 model Transaction {
   id              Int      @id @default(autoincrement())
-  
-  // DTOne Reference
   externalId      String   @unique
-  
-  // Payment Reference
   paymentIntentId String?  @unique
   paymentId       String?
   
-  // Transaction Details
   mobile          String
   productId       Int
   amount          Float
   currency        String
   productType     String?
+
+  status          String   @default("PENDING")
+  processedVia    String?
   
-  // Status Tracking
-  status          String   @default("PENDING") // PENDING, COMPLETED, FAILED, REFUNDED, REFUND_FAILED
-  processedVia    String?  // "API" or "WEBHOOK" - tracks which processor handled it
-  
-  // User Association (null for guest checkout)
   userId          String?
   user            User?    @relation(fields: [userId], references: [id])
   
-  // Timestamps
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 }
 
 // ==================================================================
-// PRODUCT MODEL (Cached from DTOne)
+// PRODUCT MODEL
 // ==================================================================
 model Product {
-  id          Int      @id
-  name        String
-  type        String
-  serviceId   Int
-  operatorId  Int
-   // Destination (what recipient gets - local currency)
-  currency    String
-  amount      Float?      // Fixed amount (for FIXED products)
-  minAmount   Float?      // Min destination amount (for RANGED products)
-  maxAmount   Float?      // Max destination amount (for RANGED products)
+  id            Int      @id
+  name          String
+  type          String
+  serviceId     Int
+  operatorId    Int
+  currency      String
   
-  // Source (what you pay - usually USD)
-  costPrice     Float?    // Fixed USD cost (for FIXED products)
-  costPriceMin  Float?    // ✅ NEW: Min USD cost (for RANGED products)
-  costPriceMax  Float?    // ✅ NEW: Max USD cost (for RANGED products)
-  costCurrency  String?   @default("USD")
+  amount        Float?
+  minAmount     Float?
+  maxAmount     Float?
   
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  costPrice     Float?
+  costPriceMin  Float?
+  costPriceMax  Float?
+  costCurrency  String?  @default("USD")
+  
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
-// Add this to prisma/schema.prisma
-
+// ==================================================================
+// REFRESH TOKEN MODEL (New)
+// ==================================================================
 model RefreshToken {
   id        String   @id @default(uuid())
   token     String   @unique

@@ -7,7 +7,7 @@ import Stripe from 'stripe';
 import cron from 'node-cron';
 import rateLimit from 'express-rate-limit'; 
 import helmet from 'helmet'; 
-import cookieParser from 'cookie-parser'; // ✅ NEW: Cookie Parser
+import cookieParser from 'cookie-parser'; 
 import { z } from 'zod';
 
 // Middleware
@@ -27,13 +27,11 @@ import { db } from './db';
 
 const app = express();
 
-// Trust Proxy
 app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
 
-// ✅ CONFIG: Global Profit Margin (1.15 = 15%)
 const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
 
@@ -84,7 +82,6 @@ app.use(cors({
   maxAge: 86400 
 }));
 
-// ✅ NEW: Enable Cookie Parser (Must be before routes)
 app.use(cookieParser());
 
 const apiLimiter = rateLimit({
@@ -107,7 +104,7 @@ app.use('/api/', apiLimiter);
 const processedWebhooks = new Set<string>();
 
 // ==================================================================
-// 🧩 UNIFIED PURCHASE LOGIC (WITH SECURITY FIXES)
+// 🧩 UNIFIED PURCHASE LOGIC
 // ==================================================================
 
 async function processPurchase(
@@ -286,7 +283,7 @@ cron.schedule('0 3 * * *', async () => {
 const purchaseSchema = z.object({
   productId: z.number().int().positive(), 
   mobile: z.string().min(7).max(15),
-  amount: z.number().positive(), // This is the paid amount from client (for verification only)
+  amount: z.number().positive(),
   unit: z.string().length(3).optional(),
   paymentId: z.string().startsWith("pi_"),
   type: z.string().optional()
@@ -304,7 +301,7 @@ const loginSchema = z.object({
 });
 
 // ==================================================================
-// 🔐 AUTHENTICATION ROUTES (COOKIE BASED)
+// 🔐 AUTHENTICATION ROUTES (DUAL TOKEN SYSTEM)
 // ==================================================================
 
 app.post('/api/auth/register', authLimiter, async (req: Request, res: Response): Promise<any> => {
@@ -314,15 +311,21 @@ app.post('/api/auth/register', authLimiter, async (req: Request, res: Response):
     
     if (!result.success) return res.status(400).json({ error: result.error });
     
-    // ✅ Secure HTTP-Only Cookie
-    res.cookie('auth_token', result.token, {
+    // ✅ 1. Refresh Token -> Cookie (HTTP Only)
+    res.cookie('refresh_token', result.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
+      path: '/api/auth/refresh',
       maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
     });
     
-    return res.status(201).json({ message: 'Registration successful', user: result.user });
+    // ✅ 2. Access Token -> JSON (Memory)
+    return res.status(201).json({ 
+      message: 'Registration successful', 
+      user: result.user,
+      accessToken: result.accessToken 
+    });
   } catch (error: any) {
     return res.status(400).json({ error: 'Registration failed' });
   }
@@ -335,22 +338,56 @@ app.post('/api/auth/login', authLimiter, async (req: Request, res: Response): Pr
     
     if (!result.success) return res.status(401).json({ error: result.error });
     
-    // ✅ Secure HTTP-Only Cookie
-    res.cookie('auth_token', result.token, {
+    // ✅ 1. Refresh Token -> Cookie (HTTP Only)
+    res.cookie('refresh_token', result.refreshToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'strict',
+      path: '/api/auth/refresh',
       maxAge: 7 * 24 * 60 * 60 * 1000
     });
     
-    return res.json({ message: 'Login successful', user: result.user });
+    // ✅ 2. Access Token -> JSON (Memory)
+    return res.json({ 
+      message: 'Login successful', 
+      user: result.user,
+      accessToken: result.accessToken
+    });
   } catch (error: any) {
     return res.status(500).json({ error: 'Login failed' });
   }
 });
 
-app.post('/api/auth/logout', (req, res) => {
-  res.clearCookie('auth_token');
+// ✅ NEW: REFRESH TOKEN ENDPOINT
+app.post('/api/auth/refresh', async (req: Request, res: Response): Promise<any> => {
+  const refreshToken = req.cookies.refresh_token;
+  if (!refreshToken) return res.sendStatus(401);
+
+  const result = await authService.refreshToken(refreshToken);
+  
+  if (!result.success) {
+    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+    return res.status(403).json({ error: 'Session expired' });
+  }
+
+  // Rotate Refresh Token
+  res.cookie('refresh_token', result.refreshToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict',
+    path: '/api/auth/refresh',
+    maxAge: 7 * 24 * 60 * 60 * 1000
+  });
+
+  return res.json({ accessToken: result.accessToken });
+});
+
+app.post('/api/auth/logout', async (req, res) => {
+  const refreshToken = req.cookies.refresh_token;
+  if (refreshToken) {
+    await authService.revokeToken(refreshToken);
+  }
+  res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
   res.json({ message: 'Logged out successfully' });
 });
 
@@ -394,8 +431,84 @@ app.get('/api/operators', (req, res) => {
   const { country } = req.query;
   res.json(country ? OPERATOR_CACHE.filter(op => op.countryCode === String(country).toUpperCase()) : OPERATOR_CACHE);
 });
-app.get('/api/products', async (req, res) => { /* (Keep your existing products logic here) */ });
-app.post('/api/lookup', async (req, res) => { /* (Keep your existing lookup logic here) */ });
+app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
+  try {
+    const { operatorId, currency, ranged } = req.query; 
+    if (!operatorId) return res.status(400).json({ error: 'Operator ID is required' });
+
+    const opId = Number(operatorId);
+    const whereClause: any = { operatorId: opId };
+    if (currency) whereClause.currency = String(currency).toUpperCase();
+    
+    if (ranged === 'true') {
+      whereClause.OR = [
+        { type: { contains: 'RANGE' } },
+        { minAmount: { not: null }, maxAmount: { not: null } }
+      ];
+    }
+
+    const localProducts = await db.product.findMany({
+      where: whereClause,
+      orderBy: { amount: 'asc' }
+    });
+
+    if (localProducts.length > 0) {
+      const mapped = localProducts.map(p => {
+        const isRanged = p.type?.includes('RANGE') || 
+                         (p.minAmount !== null && p.maxAmount !== null && p.minAmount !== p.maxAmount);
+        
+        return {
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          amount: p.amount ? `${p.amount.toFixed(2)} ${p.currency}` : 'N/A', 
+          currency: p.currency,
+          min: p.minAmount || 0,
+          max: p.maxAmount || 0,
+          subserviceId: p.serviceId,
+          benefits: [],
+          costPrice: p.costPrice,
+          costPriceMin: p.costPriceMin,
+          costPriceMax: p.costPriceMax,
+          costCurrency: p.costCurrency || 'USD',
+          isRanged
+        };
+      });
+      return res.json(mapped);
+    }
+
+    console.log(`[Cache Miss] Fetching live products for Op ${opId}`);
+    const result = await dtoneService.getProductsForOperator(opId, 1, 100, 'en');
+    
+    if (!result.success || !result.data) {
+      return res.status(400).json({ error: result.error, code: result.code });
+    }
+
+    let apiProducts = result.data;
+    if (currency) apiProducts = apiProducts.filter(p => p.currency === String(currency).toUpperCase());
+    if (ranged === 'true') apiProducts = apiProducts.filter(p => 
+      p.type.includes('RANGE') || (p.min > 0 && p.max > 0 && p.min !== p.max)
+    );
+
+    return res.json(apiProducts);
+
+  } catch (error: any) {
+    console.error('Error fetching products:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
+  const { mobile } = req.body;
+  if (!mobile) return res.status(400).json({ error: 'Mobile number is required' });
+  try {
+    const result = await dtoneService.lookupMobileNumber(mobile);
+    if (!result.success) return res.status(404).json({ error: result.error, code: result.code });
+    return res.json(result.data);
+  } catch (error: any) {
+    return res.status(500).json({ error: error.message });
+  }
+});
 
 // ==================================================================
 // 🔐 SECURE PAYMENT INTENT (SERVER-SIDE PRICE CALCULATION)
@@ -512,6 +625,25 @@ app.post('/api/purchase', optionalAuth, async (req: Request, res: Response): Pro
   } catch (error: any) {
     console.error("Purchase Error:", error);
     return res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ==================================================================
+// TRANSACTION STATUS CHECK
+// ==================================================================
+app.get('/api/transaction/:paymentId', async (req: Request, res: Response): Promise<any> => {
+  const { paymentId } = req.params;
+  try {
+    const txn = await db.transaction.findUnique({
+      where: { paymentIntentId: paymentId }
+    });
+
+    if (!txn) return res.json({ status: 'PENDING' });
+
+    return res.json({ status: txn.status, externalId: txn.externalId });
+  } catch (error: any) {
+    console.error("Status Check Error:", error);
+    return res.status(500).json({ error: error.message });
   }
 });
 

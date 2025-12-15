@@ -1,319 +1,197 @@
-// client/src/components/auth/ProfileSettings.tsx
-
 import React, { useState, useEffect } from 'react';
-import { X, User, Phone, Lock, Loader2, AlertCircle, CheckCircle, Save } from 'lucide-react';
+import { User, Phone, Lock, Save, Loader, AlertCircle, CheckCircle, X } from 'lucide-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { authApi } from '../../services/authApi';
 
-interface ProfileSettingsProps {
+// ✅ FIX: Added Props Interface for Modal
+interface Props {
   isOpen: boolean;
   onClose: () => void;
 }
 
-export default function ProfileSettings({ isOpen, onClose }: ProfileSettingsProps) {
+export default function ProfileSettings({ isOpen, onClose }: Props) {
   const { user, updateProfile } = useAuth();
-  const [activeTab, setActiveTab] = useState<'profile' | 'password'>('profile');
   
-  // Profile form
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
+  // Form State
+  const [name, setName] = useState(user?.name || '');
+  const [phone, setPhone] = useState(user?.phone || '');
   
-  // Password form
+  // Password State
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  
-  // UI state
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
 
-  // Initialize form with user data
+  // UI State
+  const [isLoading, setIsLoading] = useState(false);
+  const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
+
+  // Sync user data
   useEffect(() => {
     if (user) {
       setName(user.name || '');
       setPhone(user.phone || '');
     }
-  }, [user]);
+  }, [user, isOpen]);
 
-  // Reset messages when switching tabs
-  useEffect(() => {
-    setError('');
-    setSuccess('');
-  }, [activeTab]);
-
-  const handleUpdateProfile = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-    setIsLoading(true);
-
-    try {
-      const result = await updateProfile(name || undefined, phone || undefined);
-      
-      if (result.success) {
-        setSuccess('Profile updated successfully!');
-      } else {
-        setError(result.error || 'Update failed');
-      }
-    } catch (err) {
-      setError('Something went wrong');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleChangePassword = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setSuccess('');
-
-    // Validation
-    if (newPassword !== confirmPassword) {
-      setError('New passwords do not match');
-      return;
-    }
-
-    if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters');
-      return;
-    }
-
-    setIsLoading(true);
-
-    try {
-      const result = await authApi.changePassword(currentPassword, newPassword);
-      
-      if (result.success) {
-        setSuccess('Password changed successfully!');
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmPassword('');
-      } else {
-        setError(result.error || 'Password change failed');
-      }
-    } catch (err) {
-      setError('Something went wrong');
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
+  // ✅ FIX: Don't render if not open
   if (!isOpen) return null;
 
+  const handleProfileUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage(null);
+    setIsLoading(true);
+
+    try {
+      await updateProfile({ name, phone });
+      setMessage({ type: 'success', text: 'Profile updated successfully' });
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to update profile' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handlePasswordChange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage(null);
+
+    if (newPassword !== confirmPassword) {
+      setMessage({ type: 'error', text: 'New passwords do not match' });
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      await authApi.changePassword({ currentPassword, newPassword });
+      setMessage({ type: 'success', text: 'Password updated successfully' });
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+    } catch (err: any) {
+      setMessage({ type: 'error', text: err.message || 'Failed to change password' });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center safe-bottom">
-      <div className="bg-white w-full sm:max-w-md sm:rounded-2xl rounded-t-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col animate-in slide-in-from-bottom sm:slide-in-from-bottom-0 sm:zoom-in duration-300 overscroll-contain">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 px-5 py-4 text-white flex items-center justify-between flex-shrink-0">
-          <div className="flex items-center gap-3">
-            <User className="w-5 h-5" />
-            <div>
-              <h2 className="text-lg font-bold">Account Settings</h2>
-              <p className="text-xs text-white/80">{user?.email}</p>
-            </div>
-          </div>
-          <button 
-            onClick={onClose}
-            className="text-white/80 hover:text-white transition-colors p-2 -mr-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
-          >
-            <X className="w-5 h-5" />
+        <div className="bg-gray-50 p-4 border-b flex justify-between items-center sticky top-0 z-10">
+          <h3 className="text-lg font-bold text-gray-900">Account Settings</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full transition-colors">
+            <X className="w-5 h-5 text-gray-500" />
           </button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b flex-shrink-0">
-          <button
-            onClick={() => setActiveTab('profile')}
-            className={`flex-1 py-3 text-sm font-semibold transition-colors ${
-              activeTab === 'profile'
-                ? 'text-indigo-600 border-b-2 border-indigo-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Profile
-          </button>
-          <button
-            onClick={() => setActiveTab('password')}
-            className={`flex-1 py-3 text-sm font-semibold transition-colors ${
-              activeTab === 'password'
-                ? 'text-indigo-600 border-b-2 border-indigo-600'
-                : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            Password
-          </button>
-        </div>
-
-        {/* Content */}
-        <div className="p-5 overflow-y-auto flex-1">
-          {/* Error Message */}
-          {error && (
-            <div className="mb-4 p-3 bg-red-50 text-red-600 text-sm rounded-lg flex items-center gap-2 border border-red-100">
-              <AlertCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{error}</span>
+        <div className="p-6 space-y-8">
+          {message && (
+            <div className={`p-4 rounded-xl flex items-center gap-2 ${
+              message.type === 'success' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+            }`}>
+              {message.type === 'success' ? <CheckCircle className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+              {message.text}
             </div>
           )}
 
-          {/* Success Message */}
-          {success && (
-            <div className="mb-4 p-3 bg-green-50 text-green-600 text-sm rounded-lg flex items-center gap-2 border border-green-100">
-              <CheckCircle className="w-4 h-4 flex-shrink-0" />
-              <span>{success}</span>
-            </div>
-          )}
-
-          {/* Profile Tab */}
-          {activeTab === 'profile' && (
-            <form onSubmit={handleUpdateProfile} className="space-y-4">
-              {/* Name */}
+          {/* Profile Form */}
+          <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <User className="w-5 h-5 text-indigo-600" />
+              Personal Information
+            </h3>
+            
+            <form onSubmit={handleProfileUpdate} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Name
-                </label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="text"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Your name"
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-base"
-                  />
-                </div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                />
               </div>
-
-              {/* Phone */}
+              
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Phone Number <span className="text-gray-400 font-normal">(for quick recharge)</span>
-                </label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone Number</label>
                 <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                  <Phone className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
                   <input
                     type="tel"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
-                    placeholder="+1234567890"
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-base"
+                    className="w-full pl-9 pr-4 py-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   />
                 </div>
               </div>
 
-              {/* Email (Read-only) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  value={user?.email || ''}
-                  disabled
-                  className="w-full px-4 py-3 border border-gray-200 rounded-xl bg-gray-50 text-gray-500 cursor-not-allowed text-base"
-                />
-                <p className="text-xs text-gray-400 mt-1">Email cannot be changed</p>
-              </div>
-
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-indigo-600 text-white py-4 rounded-xl font-semibold hover:bg-indigo-700 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all text-base mt-6 min-h-[52px]"
+                className="px-6 py-2 bg-gray-900 text-white font-medium rounded-lg hover:bg-black transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-5 h-5" />
-                    Save Changes
-                  </>
-                )}
+                {isLoading ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Save Changes
               </button>
             </form>
-          )}
+          </div>
 
-          {/* Password Tab */}
-          {activeTab === 'password' && (
-            <form onSubmit={handleChangePassword} className="space-y-4">
-              {/* Current Password */}
+          {/* Password Form */}
+          <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
+            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
+              <Lock className="w-5 h-5 text-indigo-600" />
+              Change Password
+            </h3>
+
+            <form onSubmit={handlePasswordChange} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Current Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    type="password"
-                    value={currentPassword}
-                    onChange={(e) => setCurrentPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-base"
-                  />
-                </div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Current Password</label>
+                <input
+                  type="password"
+                  required
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                  className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500"
+                />
               </div>
 
-              {/* New Password */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  New Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">New Password</label>
                   <input
                     type="password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    placeholder="Min. 8 characters"
                     required
                     minLength={8}
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-base"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
-              </div>
-
-              {/* Confirm New Password */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1.5">
-                  Confirm New Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Confirm Password</label>
                   <input
                     type="password"
+                    required
+                    minLength={8}
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
-                    placeholder="••••••••"
-                    required
-                    className="w-full pl-10 pr-4 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none transition-all text-base"
+                    className="w-full px-4 py-2 rounded-lg border border-gray-200 focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>
               </div>
 
-              {/* Submit */}
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-indigo-600 text-white py-4 rounded-xl font-semibold hover:bg-indigo-700 active:scale-[0.99] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all text-base mt-6 min-h-[52px]"
+                className="px-6 py-2 bg-indigo-50 text-indigo-700 font-medium rounded-lg hover:bg-indigo-100 transition-colors disabled:opacity-50 flex items-center gap-2"
               >
-                {isLoading ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Updating...
-                  </>
-                ) : (
-                  <>
-                    <Lock className="w-5 h-5" />
-                    Change Password
-                  </>
-                )}
+                {isLoading ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                Update Password
               </button>
             </form>
-          )}
+          </div>
         </div>
       </div>
     </div>

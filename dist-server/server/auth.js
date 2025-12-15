@@ -1,5 +1,16 @@
 "use strict";
 // server/auth.ts
+var __assign = (this && this.__assign) || function () {
+    __assign = Object.assign || function(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
+                t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
 var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
     function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
     return new (P || (P = Promise))(function (resolve, reject) {
@@ -44,38 +55,53 @@ exports.authService = void 0;
 var bcryptjs_1 = __importDefault(require("bcryptjs"));
 var jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 var db_1 = require("./db");
+var uuid_1 = require("uuid");
 var JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-    throw new Error('FATAL: JWT_SECRET must be set in production');
-}
-var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-// Password requirements
-var MIN_PASSWORD_LENGTH = 8;
+if (!JWT_SECRET)
+    throw new Error('FATAL: JWT_SECRET must be set');
+var ACCESS_TOKEN_EXPIRY = '15m';
+var REFRESH_TOKEN_EXPIRY_DAYS = 7;
+// Helper to generate both tokens
+var generateTokens = function (userId, email) { return __awaiter(void 0, void 0, void 0, function () {
+    var accessToken, refreshToken, expiresAt;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                accessToken = jsonwebtoken_1.default.sign({ id: userId, email: email }, JWT_SECRET, { expiresIn: ACCESS_TOKEN_EXPIRY });
+                refreshToken = (0, uuid_1.v4)();
+                expiresAt = new Date();
+                expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+                return [4 /*yield*/, db_1.db.refreshToken.create({
+                        data: {
+                            token: refreshToken,
+                            userId: userId,
+                            expiresAt: expiresAt
+                        }
+                    })];
+            case 1:
+                _a.sent();
+                return [2 /*return*/, { accessToken: accessToken, refreshToken: refreshToken }];
+        }
+    });
+}); };
 exports.authService = {
-    /**
-     * Register a new user
-     */
     register: function (email, password, name) {
         return __awaiter(this, void 0, void 0, function () {
-            var emailRegex, existingUser, salt, passwordHash, user, token, error_1;
+            var emailRegex, existing, salt, passwordHash, user, tokens, error_1;
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        _a.trys.push([0, 5, , 6]);
+                        _a.trys.push([0, 6, , 7]);
                         emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                        if (!emailRegex.test(email)) {
-                            return [2 /*return*/, { success: false, error: 'Invalid email format' }];
-                        }
-                        // Validate password strength
-                        if (password.length < MIN_PASSWORD_LENGTH) {
-                            return [2 /*return*/, { success: false, error: "Password must be at least ".concat(MIN_PASSWORD_LENGTH, " characters") }];
-                        }
+                        if (!emailRegex.test(email))
+                            return [2 /*return*/, { success: false, error: 'Invalid email' }];
+                        if (password.length < 8)
+                            return [2 /*return*/, { success: false, error: 'Password too short' }];
                         return [4 /*yield*/, db_1.db.user.findUnique({ where: { email: email.toLowerCase() } })];
                     case 1:
-                        existingUser = _a.sent();
-                        if (existingUser) {
+                        existing = _a.sent();
+                        if (existing)
                             return [2 /*return*/, { success: false, error: 'Email already registered' }];
-                        }
                         return [4 /*yield*/, bcryptjs_1.default.genSalt(12)];
                     case 2:
                         salt = _a.sent();
@@ -83,208 +109,148 @@ exports.authService = {
                     case 3:
                         passwordHash = _a.sent();
                         return [4 /*yield*/, db_1.db.user.create({
-                                data: {
-                                    email: email.toLowerCase(),
-                                    passwordHash: passwordHash,
-                                    name: name || null
-                                }
+                                data: { email: email.toLowerCase(), passwordHash: passwordHash, name: name || null }
                             })];
                     case 4:
                         user = _a.sent();
-                        token = this.generateToken(user.id, user.email);
-                        console.log("[Auth] \u2705 New user registered: ".concat(user.email));
-                        return [2 /*return*/, {
-                                success: true,
-                                user: {
-                                    id: user.id,
-                                    email: user.email,
-                                    name: user.name,
-                                    phone: user.phone
-                                },
-                                token: token
-                            }];
+                        return [4 /*yield*/, generateTokens(user.id, user.email)];
                     case 5:
-                        error_1 = _a.sent();
-                        console.error('[Auth] Registration error:', error_1);
-                        return [2 /*return*/, { success: false, error: 'Registration failed. Please try again.' }];
-                    case 6: return [2 /*return*/];
-                }
-            });
-        });
-    },
-    /**
-     * Login user
-     */
-    login: function (email, password) {
-        return __awaiter(this, void 0, void 0, function () {
-            var user, isValid, token, error_2;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        _a.trys.push([0, 3, , 4]);
-                        return [4 /*yield*/, db_1.db.user.findUnique({ where: { email: email.toLowerCase() } })];
-                    case 1:
-                        user = _a.sent();
-                        if (!user) {
-                            return [2 /*return*/, { success: false, error: 'Invalid email or password' }];
-                        }
-                        return [4 /*yield*/, bcryptjs_1.default.compare(password, user.passwordHash)];
-                    case 2:
-                        isValid = _a.sent();
-                        if (!isValid) {
-                            return [2 /*return*/, { success: false, error: 'Invalid email or password' }];
-                        }
-                        token = this.generateToken(user.id, user.email);
-                        console.log("[Auth] \u2705 User logged in: ".concat(user.email));
-                        return [2 /*return*/, {
-                                success: true,
-                                user: {
-                                    id: user.id,
-                                    email: user.email,
-                                    name: user.name,
-                                    phone: user.phone
-                                },
-                                token: token
-                            }];
-                    case 3:
-                        error_2 = _a.sent();
-                        console.error('[Auth] Login error:', error_2);
-                        return [2 /*return*/, { success: false, error: 'Login failed. Please try again.' }];
-                    case 4: return [2 /*return*/];
-                }
-            });
-        });
-    },
-    /**
-     * Verify JWT token and return user
-     */
-    verifyToken: function (token) {
-        return __awaiter(this, void 0, void 0, function () {
-            var decoded, user, error_3;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        _a.trys.push([0, 2, , 3]);
-                        decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
-                        return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.userId } })];
-                    case 1:
-                        user = _a.sent();
-                        if (!user) {
-                            return [2 /*return*/, { success: false, error: 'User not found' }];
-                        }
-                        return [2 /*return*/, {
-                                success: true,
-                                user: {
-                                    id: user.id,
-                                    email: user.email,
-                                    name: user.name,
-                                    phone: user.phone
-                                }
-                            }];
-                    case 2:
-                        error_3 = _a.sent();
-                        if (error_3.name === 'TokenExpiredError') {
-                            return [2 /*return*/, { success: false, error: 'Token expired' }];
-                        }
-                        return [2 /*return*/, { success: false, error: 'Invalid token' }];
-                    case 3: return [2 /*return*/];
-                }
-            });
-        });
-    },
-    /**
-     * Update user profile
-     */
-    updateProfile: function (userId, data) {
-        return __awaiter(this, void 0, void 0, function () {
-            var user, error_4;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        _a.trys.push([0, 2, , 3]);
-                        return [4 /*yield*/, db_1.db.user.update({
-                                where: { id: userId },
-                                data: {
-                                    name: data.name,
-                                    phone: data.phone
-                                }
-                            })];
-                    case 1:
-                        user = _a.sent();
-                        return [2 /*return*/, {
-                                success: true,
-                                user: {
-                                    id: user.id,
-                                    email: user.email,
-                                    name: user.name,
-                                    phone: user.phone
-                                }
-                            }];
-                    case 2:
-                        error_4 = _a.sent();
-                        console.error('[Auth] Update profile error:', error_4);
-                        return [2 /*return*/, { success: false, error: 'Failed to update profile' }];
-                    case 3: return [2 /*return*/];
-                }
-            });
-        });
-    },
-    /**
-     * Change password
-     */
-    changePassword: function (userId, currentPassword, newPassword) {
-        return __awaiter(this, void 0, void 0, function () {
-            var user, isValid, salt, passwordHash, error_5;
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        _a.trys.push([0, 6, , 7]);
-                        return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: userId } })];
-                    case 1:
-                        user = _a.sent();
-                        if (!user) {
-                            return [2 /*return*/, { success: false, error: 'User not found' }];
-                        }
-                        return [4 /*yield*/, bcryptjs_1.default.compare(currentPassword, user.passwordHash)];
-                    case 2:
-                        isValid = _a.sent();
-                        if (!isValid) {
-                            return [2 /*return*/, { success: false, error: 'Current password is incorrect' }];
-                        }
-                        // Validate new password
-                        if (newPassword.length < MIN_PASSWORD_LENGTH) {
-                            return [2 /*return*/, { success: false, error: "Password must be at least ".concat(MIN_PASSWORD_LENGTH, " characters") }];
-                        }
-                        return [4 /*yield*/, bcryptjs_1.default.genSalt(12)];
-                    case 3:
-                        salt = _a.sent();
-                        return [4 /*yield*/, bcryptjs_1.default.hash(newPassword, salt)];
-                    case 4:
-                        passwordHash = _a.sent();
-                        return [4 /*yield*/, db_1.db.user.update({
-                                where: { id: userId },
-                                data: { passwordHash: passwordHash }
-                            })];
-                    case 5:
-                        _a.sent();
-                        console.log("[Auth] \u2705 Password changed for: ".concat(user.email));
-                        return [2 /*return*/, { success: true }];
+                        tokens = _a.sent();
+                        return [2 /*return*/, __assign({ success: true, user: { id: user.id, email: user.email, name: user.name, phone: user.phone } }, tokens)];
                     case 6:
-                        error_5 = _a.sent();
-                        console.error('[Auth] Change password error:', error_5);
-                        return [2 /*return*/, { success: false, error: 'Failed to change password' }];
+                        error_1 = _a.sent();
+                        console.error('[Auth] Register error:', error_1);
+                        return [2 /*return*/, { success: false, error: 'Registration failed' }];
                     case 7: return [2 /*return*/];
                 }
             });
         });
     },
-    /**
-     * Generate JWT token
-     */
-    generateToken: function (userId, email) {
-        var payload = { userId: userId, email: email };
-        return jsonwebtoken_1.default.sign(payload, JWT_SECRET, {
-            expiresIn: JWT_EXPIRES_IN
+    login: function (email, password) {
+        return __awaiter(this, void 0, void 0, function () {
+            var user, isValid, tokens, error_2;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 4, , 5]);
+                        return [4 /*yield*/, db_1.db.user.findUnique({ where: { email: email.toLowerCase() } })];
+                    case 1:
+                        user = _a.sent();
+                        if (!user)
+                            return [2 /*return*/, { success: false, error: 'Invalid credentials' }];
+                        return [4 /*yield*/, bcryptjs_1.default.compare(password, user.passwordHash)];
+                    case 2:
+                        isValid = _a.sent();
+                        if (!isValid)
+                            return [2 /*return*/, { success: false, error: 'Invalid credentials' }];
+                        return [4 /*yield*/, generateTokens(user.id, user.email)];
+                    case 3:
+                        tokens = _a.sent();
+                        return [2 /*return*/, __assign({ success: true, user: { id: user.id, email: user.email, name: user.name, phone: user.phone } }, tokens)];
+                    case 4:
+                        error_2 = _a.sent();
+                        console.error('[Auth] Login error:', error_2);
+                        return [2 /*return*/, { success: false, error: 'Login failed' }];
+                    case 5: return [2 /*return*/];
+                }
+            });
+        });
+    },
+    refreshToken: function (token) {
+        return __awaiter(this, void 0, void 0, function () {
+            var storedToken, newTokens, error_3;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 4, , 5]);
+                        return [4 /*yield*/, db_1.db.refreshToken.findUnique({
+                                where: { token: token },
+                                include: { user: true }
+                            })];
+                    case 1:
+                        storedToken = _a.sent();
+                        if (!storedToken || storedToken.revoked || new Date() > storedToken.expiresAt) {
+                            return [2 /*return*/, { success: false, error: 'Invalid refresh token' }];
+                        }
+                        return [4 /*yield*/, db_1.db.refreshToken.update({
+                                where: { id: storedToken.id },
+                                data: { revoked: true }
+                            })];
+                    case 2:
+                        _a.sent();
+                        return [4 /*yield*/, generateTokens(storedToken.userId, storedToken.user.email)];
+                    case 3:
+                        newTokens = _a.sent();
+                        return [2 /*return*/, __assign({ success: true }, newTokens)];
+                    case 4:
+                        error_3 = _a.sent();
+                        return [2 /*return*/, { success: false, error: 'Refresh failed' }];
+                    case 5: return [2 /*return*/];
+                }
+            });
+        });
+    },
+    revokeToken: function (token) {
+        return __awaiter(this, void 0, void 0, function () {
+            var e_1;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0:
+                        _a.trys.push([0, 2, , 3]);
+                        return [4 /*yield*/, db_1.db.refreshToken.update({ where: { token: token }, data: { revoked: true } })];
+                    case 1:
+                        _a.sent();
+                        return [2 /*return*/, { success: true }];
+                    case 2:
+                        e_1 = _a.sent();
+                        return [2 /*return*/, { success: false }];
+                    case 3: return [2 /*return*/];
+                }
+            });
+        });
+    },
+    // ✅ FIX: Added ': Promise<AuthResult>' return type
+    updateProfile: function (userId, data) {
+        return __awaiter(this, void 0, void 0, function () {
+            var user;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0: return [4 /*yield*/, db_1.db.user.update({ where: { id: userId }, data: data })];
+                    case 1:
+                        user = _a.sent();
+                        return [2 /*return*/, { success: true, user: { id: user.id, email: user.email, name: user.name, phone: user.phone } }];
+                }
+            });
+        });
+    },
+    // ✅ FIX: Added ': Promise<AuthResult>' return type
+    changePassword: function (userId, current, newPass) {
+        return __awaiter(this, void 0, void 0, function () {
+            var user, isValid, salt, hash;
+            return __generator(this, function (_a) {
+                switch (_a.label) {
+                    case 0: return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: userId } })];
+                    case 1:
+                        user = _a.sent();
+                        if (!user)
+                            return [2 /*return*/, { success: false, error: 'User not found' }];
+                        return [4 /*yield*/, bcryptjs_1.default.compare(current, user.passwordHash)];
+                    case 2:
+                        isValid = _a.sent();
+                        if (!isValid)
+                            return [2 /*return*/, { success: false, error: 'Incorrect password' }];
+                        return [4 /*yield*/, bcryptjs_1.default.genSalt(12)];
+                    case 3:
+                        salt = _a.sent();
+                        return [4 /*yield*/, bcryptjs_1.default.hash(newPass, salt)];
+                    case 4:
+                        hash = _a.sent();
+                        return [4 /*yield*/, db_1.db.user.update({ where: { id: userId }, data: { passwordHash: hash } })];
+                    case 5:
+                        _a.sent();
+                        return [2 /*return*/, { success: true }];
+                }
+            });
         });
     }
 };

@@ -6,19 +6,10 @@ import { db } from './db';
 import { v4 as uuidv4 } from 'uuid';
 
 const JWT_SECRET = process.env.JWT_SECRET;
-if (!JWT_SECRET) {
-  throw new Error('FATAL: JWT_SECRET must be set in production');
-}
+if (!JWT_SECRET) throw new Error('FATAL: JWT_SECRET must be set');
 
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
-
-// Password requirements
-const MIN_PASSWORD_LENGTH = 8;
-
-export interface JwtPayload {
-  userId: string;
-  email: string;
-}
+const ACCESS_TOKEN_EXPIRY = '15m'; 
+const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 
 export interface AuthResult {
   success: boolean;
@@ -28,213 +19,134 @@ export interface AuthResult {
     name: string | null;
     phone: string | null;
   };
-  token?: string;
+  accessToken?: string;
+  refreshToken?: string;
   error?: string;
 }
 
+// Helper to generate both tokens
+const generateTokens = async (userId: string, email: string) => {
+  const accessToken = jwt.sign(
+    { id: userId, email }, 
+    JWT_SECRET!, 
+    { expiresIn: ACCESS_TOKEN_EXPIRY }
+  );
+
+  const refreshToken = uuidv4();
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+  await db.refreshToken.create({
+    data: {
+      token: refreshToken,
+      userId: userId,
+      expiresAt: expiresAt
+    }
+  });
+
+  return { accessToken, refreshToken };
+};
+
 export const authService = {
-  /**
-   * Register a new user
-   */
   async register(email: string, password: string, name?: string): Promise<AuthResult> {
     try {
-      // Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      if (!emailRegex.test(email)) {
-        return { success: false, error: 'Invalid email format' };
-      }
+      if (!emailRegex.test(email)) return { success: false, error: 'Invalid email' };
+      if (password.length < 8) return { success: false, error: 'Password too short' };
 
-      // Validate password strength
-      if (password.length < MIN_PASSWORD_LENGTH) {
-        return { success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` };
-      }
+      const existing = await db.user.findUnique({ where: { email: email.toLowerCase() } });
+      if (existing) return { success: false, error: 'Email already registered' };
 
-      // Check if user exists
-      const existingUser = await db.user.findUnique({ where: { email: email.toLowerCase() } });
-      if (existingUser) {
-        return { success: false, error: 'Email already registered' };
-      }
-
-      // Hash password
       const salt = await bcrypt.genSalt(12);
       const passwordHash = await bcrypt.hash(password, salt);
 
-      // Create user
       const user = await db.user.create({
-        data: {
-          email: email.toLowerCase(),
-          passwordHash,
-          name: name || null
-        }
+        data: { email: email.toLowerCase(), passwordHash, name: name || null }
       });
 
-      // Generate token
-      const token = this.generateToken(user.id, user.email);
-
-      console.log(`[Auth] ✅ New user registered: ${user.email}`);
+      const tokens = await generateTokens(user.id, user.email);
 
       return {
         success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          phone: user.phone
-        },
-        token
+        user: { id: user.id, email: user.email, name: user.name, phone: user.phone },
+        ...tokens
       };
-
-    } catch (error: any) {
-      console.error('[Auth] Registration error:', error);
-      return { success: false, error: 'Registration failed. Please try again.' };
+    } catch (error) {
+      console.error('[Auth] Register error:', error);
+      return { success: false, error: 'Registration failed' };
     }
   },
 
-  /**
-   * Login user
-   */
   async login(email: string, password: string): Promise<AuthResult> {
     try {
-      // Find user
       const user = await db.user.findUnique({ where: { email: email.toLowerCase() } });
-      if (!user) {
-        return { success: false, error: 'Invalid email or password' };
-      }
+      if (!user) return { success: false, error: 'Invalid credentials' };
 
-      // Verify password
       const isValid = await bcrypt.compare(password, user.passwordHash);
-      if (!isValid) {
-        return { success: false, error: 'Invalid email or password' };
-      }
+      if (!isValid) return { success: false, error: 'Invalid credentials' };
 
-      // Generate token
-      const token = this.generateToken(user.id, user.email);
-
-      console.log(`[Auth] ✅ User logged in: ${user.email}`);
+      const tokens = await generateTokens(user.id, user.email);
 
       return {
         success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          phone: user.phone
-        },
-        token
+        user: { id: user.id, email: user.email, name: user.name, phone: user.phone },
+        ...tokens
       };
-
-    } catch (error: any) {
+    } catch (error) {
       console.error('[Auth] Login error:', error);
-      return { success: false, error: 'Login failed. Please try again.' };
+      return { success: false, error: 'Login failed' };
     }
   },
 
-  /**
-   * Verify JWT token and return user
-   */
-  async verifyToken(token: string): Promise<AuthResult> {
+  async refreshToken(token: string): Promise<AuthResult> {
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload;
-      
-      const user = await db.user.findUnique({ where: { id: decoded.userId } });
-      if (!user) {
-        return { success: false, error: 'User not found' };
-      }
-
-      return {
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          phone: user.phone
-        }
-      };
-
-    } catch (error: any) {
-      if (error.name === 'TokenExpiredError') {
-        return { success: false, error: 'Token expired' };
-      }
-      return { success: false, error: 'Invalid token' };
-    }
-  },
-
-  /**
-   * Update user profile
-   */
-  async updateProfile(userId: string, data: { name?: string; phone?: string }): Promise<AuthResult> {
-    try {
-      const user = await db.user.update({
-        where: { id: userId },
-        data: {
-          name: data.name,
-          phone: data.phone
-        }
+      const storedToken = await db.refreshToken.findUnique({
+        where: { token },
+        include: { user: true }
       });
 
-      return {
-        success: true,
-        user: {
-          id: user.id,
-          email: user.email,
-          name: user.name,
-          phone: user.phone
-        }
-      };
+      if (!storedToken || storedToken.revoked || new Date() > storedToken.expiresAt) {
+        return { success: false, error: 'Invalid refresh token' };
+      }
 
-    } catch (error: any) {
-      console.error('[Auth] Update profile error:', error);
-      return { success: false, error: 'Failed to update profile' };
+      await db.refreshToken.update({
+        where: { id: storedToken.id },
+        data: { revoked: true }
+      });
+
+      const newTokens = await generateTokens(storedToken.userId, storedToken.user.email);
+      return { success: true, ...newTokens };
+
+    } catch (error) {
+      return { success: false, error: 'Refresh failed' };
     }
   },
 
-  /**
-   * Change password
-   */
-  async changePassword(userId: string, currentPassword: string, newPassword: string): Promise<AuthResult> {
+  async revokeToken(token: string) {
     try {
-      const user = await db.user.findUnique({ where: { id: userId } });
-      if (!user) {
-        return { success: false, error: 'User not found' };
-      }
-
-      // Verify current password
-      const isValid = await bcrypt.compare(currentPassword, user.passwordHash);
-      if (!isValid) {
-        return { success: false, error: 'Current password is incorrect' };
-      }
-
-      // Validate new password
-      if (newPassword.length < MIN_PASSWORD_LENGTH) {
-        return { success: false, error: `Password must be at least ${MIN_PASSWORD_LENGTH} characters` };
-      }
-
-      // Hash new password
-      const salt = await bcrypt.genSalt(12);
-      const passwordHash = await bcrypt.hash(newPassword, salt);
-
-      await db.user.update({
-        where: { id: userId },
-        data: { passwordHash }
-      });
-
-      console.log(`[Auth] ✅ Password changed for: ${user.email}`);
-
+      await db.refreshToken.update({ where: { token }, data: { revoked: true } });
       return { success: true };
-
-    } catch (error: any) {
-      console.error('[Auth] Change password error:', error);
-      return { success: false, error: 'Failed to change password' };
-    }
+    } catch (e) { return { success: false }; }
   },
 
-  /**
-   * Generate JWT token
-   */
-  generateToken(userId: string, email: string): string {
-    const payload: JwtPayload = { userId, email };
-    return jwt.sign(payload, JWT_SECRET, { 
-      expiresIn: JWT_EXPIRES_IN as any
-    });
+  // ✅ FIX: Added ': Promise<AuthResult>' return type
+  async updateProfile(userId: string, data: { name?: string; phone?: string }): Promise<AuthResult> {
+    const user = await db.user.update({ where: { id: userId }, data });
+    return { success: true, user: { id: user.id, email: user.email, name: user.name, phone: user.phone } };
+  },
+
+  // ✅ FIX: Added ': Promise<AuthResult>' return type
+  async changePassword(userId: string, current: string, newPass: string): Promise<AuthResult> {
+    const user = await db.user.findUnique({ where: { id: userId } });
+    if (!user) return { success: false, error: 'User not found' };
+    
+    const isValid = await bcrypt.compare(current, user.passwordHash);
+    if (!isValid) return { success: false, error: 'Incorrect password' };
+
+    const salt = await bcrypt.genSalt(12);
+    const hash = await bcrypt.hash(newPass, salt);
+    await db.user.update({ where: { id: userId }, data: { passwordHash: hash } });
+    
+    return { success: true };
   }
 };

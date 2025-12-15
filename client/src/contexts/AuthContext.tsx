@@ -1,106 +1,77 @@
 // client/src/contexts/AuthContext.tsx
 
-import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { authApi, User, getStoredToken, getStoredUser, clearAuth } from '../services/authApi';
+import React, { createContext, useContext, useState, useEffect } from 'react';
+import { authApi, User } from '../services/authApi';
+import { setAccessToken } from '../services/api';
 
 interface AuthContextType {
   user: User | null;
-  isAuthenticated: boolean;
-  isLoading: boolean;
-  login: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
-  register: (email: string, password: string, name?: string) => Promise<{ success: boolean; error?: string }>;
-  logout: () => void;
-  updateProfile: (name?: string, phone?: string) => Promise<{ success: boolean; error?: string }>;
+  loading: boolean;
+  login: (credentials: any) => Promise<void>;
+  register: (userData: any) => Promise<void>;
+  logout: () => Promise<void>;
+  updateProfile: (data: any) => Promise<void>;
 }
 
-const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
+export const useAuth = () => {
+  const context = useContext(AuthContext);
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
+  return context;
+};
+
+export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [loading, setLoading] = useState(true);
 
-  // Check for existing session on mount
+  // Initialize: Check if user is already logged in (via Cookie)
   useEffect(() => {
     const initAuth = async () => {
-      const token = getStoredToken();
-      const storedUser = getStoredUser();
-
-      if (token && storedUser) {
-        // Verify token is still valid
-        const result = await authApi.getProfile();
-        if (result.success && result.user) {
-          setUser(result.user);
-        } else {
-          // Token expired or invalid
-          clearAuth();
+      try {
+        const data = await authApi.getCurrentUser();
+        if (data.user) {
+          setUser(data.user);
         }
+      } catch (error) {
+        // Not logged in, that's fine
+        setUser(null);
+      } finally {
+        setLoading(false);
       }
-
-      setIsLoading(false);
     };
-
     initAuth();
   }, []);
 
-  const login = async (email: string, password: string) => {
-    const result = await authApi.login(email, password);
-    
-    if (result.success && result.user) {
-      setUser(result.user);
-      return { success: true };
-    }
-    
-    return { success: false, error: result.error };
+  const login = async (credentials: any) => {
+    // ✅ Fix: Pass object { email, password }
+    const { user, accessToken } = await authApi.login(credentials);
+    setUser(user);
+    if (accessToken) setAccessToken(accessToken);
   };
 
-  const register = async (email: string, password: string, name?: string) => {
-    const result = await authApi.register(email, password, name);
-    
-    if (result.success && result.user) {
-      setUser(result.user);
-      return { success: true };
-    }
-    
-    return { success: false, error: result.error };
+  const register = async (userData: any) => {
+    // ✅ Fix: Pass object { email, password, name }
+    const { user, accessToken } = await authApi.register(userData);
+    setUser(user);
+    if (accessToken) setAccessToken(accessToken);
   };
 
-  const logout = () => {
-    authApi.logout();
+  const logout = async () => {
+    await authApi.logout();
+    setAccessToken(null);
     setUser(null);
   };
 
-  const updateProfile = async (name?: string, phone?: string) => {
-    const result = await authApi.updateProfile(name, phone);
-    
-    if (result.success && result.user) {
-      setUser(result.user);
-      return { success: true };
-    }
-    
-    return { success: false, error: result.error };
-  };
-
-  const value: AuthContextType = {
-    user,
-    isAuthenticated: !!user,
-    isLoading,
-    login,
-    register,
-    logout,
-    updateProfile
+  const updateProfile = async (data: any) => {
+    // ✅ Fix: Pass object { name, phone }
+    const { user: updatedUser } = await authApi.updateProfile(data);
+    setUser(updatedUser);
   };
 
   return (
-    <AuthContext.Provider value={value}>
+    <AuthContext.Provider value={{ user, loading, login, register, logout, updateProfile }}>
       {children}
     </AuthContext.Provider>
   );
-}
-
-export function useAuth() {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
-  return context;
-}
+};

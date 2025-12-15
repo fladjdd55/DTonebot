@@ -2,6 +2,25 @@
 
 const API_URL = '/api/auth';
 
+// ✅ ADDED: Export interfaces
+export interface User {
+  id: string;
+  email: string;
+  name?: string;
+  phone?: string;
+}
+
+export interface Transaction {
+  id: number;
+  mobile: string;
+  amount: number;
+  currency: string;
+  status: string;
+  productType?: string;
+  createdAt: string;
+  externalId: string;
+}
+
 // Helper to handle responses
 const handleResponse = async (response: Response) => {
   const data = await response.json();
@@ -19,8 +38,6 @@ export const authApi = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(credentials),
     });
-    // Note: We don't need to save the token manually. 
-    // The server sent a Set-Cookie header, and the browser saved it automatically.
     return handleResponse(response);
   },
 
@@ -40,7 +57,6 @@ export const authApi = {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
     });
-    // Server will send a command to delete the cookie
     return handleResponse(response);
   },
 
@@ -49,7 +65,6 @@ export const authApi = {
     const response = await fetch(`${API_URL}/me`, {
       method: 'GET',
       headers: { 'Content-Type': 'application/json' },
-      // No 'Authorization' header needed! The cookie is sent automatically.
     });
     return handleResponse(response);
   },

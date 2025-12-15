@@ -48,7 +48,7 @@ function App() {
       <AuthModal
         isOpen={showAuthModal}
         onClose={() => setShowAuthModal(false)}
-        initialTab={authTab}
+        initialView={authTab} // ✅ FIX: Renamed from initialTab to initialView
       />
 
       {/* Profile Settings Modal */}
