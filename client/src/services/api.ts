@@ -9,8 +9,12 @@ export interface Product {
   max: number;
   subserviceId?: number;
   benefits: string[];
-  costPrice?: number;
+  costPrice?: number;         // Fixed cost OR min cost for ranged
+  costPriceMin?: number;      // Min USD cost (for RANGED products)
+  costPriceMax?: number;      // Max USD cost (for RANGED products)
   costCurrency?: string;
+  // ✅ Helper flag
+  isRanged?: boolean;
 }
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';

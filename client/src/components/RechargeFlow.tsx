@@ -1,8 +1,7 @@
 // client/src/components/RechargeFlow.tsx
-// ✅ IMPROVED VERSION - CLEAN (No duplicates)
 
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import { Search, Check, AlertCircle, Phone, Loader2, Wifi, ArrowRight, X, Smartphone, Globe, Package } from 'lucide-react';
+import { Search, Check, AlertCircle, Phone, Loader2, Wifi, ArrowRight, X, Smartphone, Globe, Package, DollarSign } from 'lucide-react';
 import ReactCountryFlag from 'react-country-flag';
 import type { CountryCode } from 'libphonenumber-js';
 
@@ -15,21 +14,99 @@ import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 import ConfirmationModal from './ConfirmationModal';
 
-const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_ORDER_USD) || 5;
+// ✅ FIX: Use the same variable name as the server
+const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_USD_ORDER) || 5;
+
+// ==================================================================
+// ✅ HELPER FUNCTIONS (FIXED LOGIC)
+// ==================================================================
 
 /**
- * Strict filter: Only show products with valid costPrice >= minimum
+ * Check if a FIXED product is eligible (costPrice >= minimum)
  */
-const isProductEligible = (p: Product): boolean => {
-  // Must have costPrice to be shown
+const isFixedProductEligible = (p: Product): boolean => {
   if (p.costPrice === undefined || p.costPrice === null) {
-    return false;
+    return true; // Fallback: show if cost is unknown
   }
-  
-  // Check against minimum (costPrice is always USD from DTOne)
   return p.costPrice >= MIN_USD_AMOUNT;
 };
 
+/**
+ * Check if a RANGED product can potentially meet the minimum.
+ * FIX: Calculates dynamic max cost to avoid hiding valid ranges.
+ */
+const isRangedProductEligible = (p: Product): boolean => {
+  // If we don't have cost data, assume it's valid to be safe
+  if (!p.costPrice || !p.min || !p.max) return true;
+
+  // Calculate the cost ratio (Cost per 1 Unit of Local Currency)
+  // p.costPrice is the cost for the minimum amount (p.min)
+  const costRatio = p.costPrice / p.min;
+  
+  // Calculate the Cost for the Maximum amount
+  const maxPotentialCost = p.max * costRatio;
+
+  // It's eligible if the Highest possible purchase is >= Minimum USD
+  return maxPotentialCost >= MIN_USD_AMOUNT;
+};
+
+/**
+ * Calculate USD cost for a custom amount in local currency
+ */
+const calculateUsdCost = (localAmount: number, product: Product): number | null => {
+  if (!product.min || product.min === 0) return null;
+  if (!product.costPrice) return null;
+  
+  // Cost ratio: USD per local currency unit
+  const costRatio = product.costPrice / product.min;
+  return localAmount * costRatio;
+};
+
+/**
+ * Get minimum local currency amount that meets USD minimum
+ */
+const getMinLocalAmount = (product: Product): number | null => {
+  if (!product.min || product.min === 0) return null;
+  if (!product.costPrice) return null;
+  
+  const costRatio = product.costPrice / product.min;
+  if (costRatio === 0) return null;
+  
+  // Minimum local amount = MIN_USD_AMOUNT / costRatio
+  return Math.ceil(MIN_USD_AMOUNT / costRatio);
+};
+
+/**
+ * Validate custom amount input
+ */
+const validateCustomAmount = (value: string, product: Product): string | null => {
+  const amount = parseFloat(value);
+  
+  if (isNaN(amount) || amount <= 0) {
+    return 'Please enter a valid amount';
+  }
+  
+  // 1. Check within product range (API Limits)
+  if (amount < product.min) {
+    return `Minimum amount is ${product.min} ${product.currency}`;
+  }
+  if (amount > product.max) {
+    return `Maximum amount is ${product.max} ${product.currency}`;
+  }
+  
+  // 2. Check Calculated USD minimum
+  const minLocalReq = getMinLocalAmount(product);
+  
+  if (minLocalReq && amount < minLocalReq) {
+     return `Minimum order is $${MIN_USD_AMOUNT} USD. Enter at least ${minLocalReq} ${product.currency}`;
+  }
+  
+  return null; // Valid
+};
+
+// ==================================================================
+// COMPONENT
+// ==================================================================
 
 export default function RechargeFlow() {
   const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1); 
@@ -58,6 +135,12 @@ export default function RechargeFlow() {
 
   const [currency, setCurrency] = useState(''); 
   const [priceFilter, setPriceFilter] = useState<number | 'ALL'>('ALL'); 
+
+  // Custom amount state
+  const [showCustomAmount, setShowCustomAmount] = useState(false);
+  const [customAmount, setCustomAmount] = useState('');
+  const [customAmountError, setCustomAmountError] = useState<string | null>(null);
+  const [selectedRangedProduct, setSelectedRangedProduct] = useState<Product | null>(null);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { countries, loading: countriesLoading, error: countriesError, usingFallback } = useCountries();
@@ -88,27 +171,40 @@ export default function RechargeFlow() {
     }
   }, [availableCurrencies, currency]);
 
-  const filteredProducts = useMemo(() => {
+  // ✅ UPDATED: Separate fixed and ranged products with eligibility checks
+  const { fixedProducts, rangedProducts } = useMemo(() => {
     let list = allProducts;
-    list = list.filter(p => !p.type.includes('RANGED'));
+    
+    // Filter by currency if selected
     if (currency) list = list.filter(p => p.currency === currency);
-    list = list.filter(isProductEligible);
+    
+    // Separate fixed and ranged
+    const fixed = list.filter(p => !p.type?.includes('RANGED'));
+    const ranged = list.filter(p => p.type?.includes('RANGED'));
+    
+    // Apply eligibility filters (Check Min Order USD)
+    const eligibleFixed = fixed.filter(isFixedProductEligible);
+    const eligibleRanged = ranged.filter(isRangedProductEligible);
+    
+    // Apply price filter to fixed products
+    let filteredFixed = eligibleFixed;
     if (priceFilter !== 'ALL') {
-      list = list.filter(p => {
+      filteredFixed = eligibleFixed.filter(p => {
         const price = parseFloat(p.amount.split(' ')[0]);
         return Math.abs(price - priceFilter) <= 1.5; 
       });
     }
-    return list;
+    
+    return { fixedProducts: filteredFixed, rangedProducts: eligibleRanged };
   }, [allProducts, currency, priceFilter]);
 
   const categorizedProducts = useMemo(() => {
     return {
-      AIRTIME: filteredProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
-      DATA: filteredProducts.filter(p => p.subserviceId === 12),
-      BUNDLES: filteredProducts.filter(p => p.subserviceId === 13),
+      AIRTIME: fixedProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
+      DATA: fixedProducts.filter(p => p.subserviceId === 12),
+      BUNDLES: fixedProducts.filter(p => p.subserviceId === 13),
     };
-  }, [filteredProducts]);
+  }, [fixedProducts]);
 
   const visibleTabs = useMemo(() => {
     const tabs: ('AIRTIME' | 'DATA' | 'BUNDLES')[] = [];
@@ -154,6 +250,33 @@ export default function RechargeFlow() {
   useEffect(() => {
     if (operator) setLogoError(false);
   }, [operator]);
+
+  // CUSTOM AMOUNT HANDLERS
+  const handleCustomAmountChange = (value: string) => {
+    setCustomAmount(value);
+    
+    if (selectedRangedProduct && value) {
+      const error = validateCustomAmount(value, selectedRangedProduct);
+      setCustomAmountError(error);
+    } else {
+      setCustomAmountError(null);
+    }
+  };
+
+  const handleCustomAmountPurchase = () => {
+    if (!selectedRangedProduct || customAmountError || !customAmount) return;
+    
+    const amount = parseFloat(customAmount);
+    if (isNaN(amount)) return;
+    
+    // Create product object with custom amount for display
+    const customProduct: Product = {
+      ...selectedRangedProduct,
+      amount: `${amount} ${selectedRangedProduct.currency}`
+    };
+    
+    handlePurchase(customProduct, amount);
+  };
 
   const handleCountrySelect = (country: Country) => {
     setSelectedCountry(country);
@@ -220,12 +343,18 @@ export default function RechargeFlow() {
 
   const handleConfirmOperator = async () => {
     setStep(2);
+    // Reset custom amount state when entering step 2
+    setShowCustomAmount(false);
+    setCustomAmount('');
+    setCustomAmountError(null);
+    setSelectedRangedProduct(null);
   };
 
-  const handlePurchase = async (product: Product) => {
+  const handlePurchase = async (product: Product, customAmountValue?: number) => {
     const priceString = product.amount.split(' ')[0]; 
-    const finalAmount = parseFloat(priceString);
+    const finalAmount = customAmountValue || parseFloat(priceString);
 
+    // Basic sanity check before modal (Full check is in backend)
     const effectiveMin = product.currency === 'USD' ? Math.max(product.min, MIN_USD_AMOUNT) : product.min;
     if (finalAmount < effectiveMin) {
         setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
@@ -250,12 +379,12 @@ export default function RechargeFlow() {
 
     try {
       let result = await rechargeApi.purchase(
-        pendingTxn.product.id,       
-        pendingTxn.mobile,           
-        pendingTxn.amount,           
+        pendingTxn.product.id,        
+        pendingTxn.mobile,            
+        pendingTxn.amount,            
         pendingTxn.product.currency, 
-        pendingTxn.product.type,     
-        paymentId                    
+        pendingTxn.product.type,      
+        paymentId                      
       );
 
       if (result.success && result.dbStatus === 'PENDING') {
@@ -329,14 +458,19 @@ export default function RechargeFlow() {
     setApiError('');
     setOperator(null);
     setShowManualSelection(false);
-    setPriceFilter('ALL'); 
+    setPriceFilter('ALL');
+    // Reset custom amount
+    setShowCustomAmount(false);
+    setCustomAmount('');
+    setCustomAmountError(null);
+    setSelectedRangedProduct(null);
   };
 
   if (countriesLoading) return <div className="text-center p-10"><Loader2 className="w-8 h-8 mx-auto animate-spin text-indigo-600" /><p className="mt-4 text-gray-600">Loading countries list...</p></div>;
   if (countriesError && !usingFallback && countries.length === 0) return <div className="text-center p-10 text-red-600">{countriesError}</div>;
 
   return (
-    <div className="min-h-screen-safe bg-gray-50 flex justify-center p-4 pt-10 safe-bottom">
+    <div className="min-h-screen bg-gray-50 flex justify-center p-4 pt-10 safe-bottom">
       <div className="w-full max-w-md bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100 h-fit">
         
         <div className="bg-indigo-600 p-6 text-white relative">
@@ -600,9 +734,10 @@ export default function RechargeFlow() {
                 ) : (
                 <>
                 {activeTab === 'AIRTIME' && (
-                  <div className="space-y-2">
+                  <div className="space-y-4">
+                    {/* Fixed Amount Products */}
                     {categorizedProducts.AIRTIME.length > 0 ? (
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[300px] overflow-y-auto pr-1 scrollbar-hide">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 max-h-[250px] overflow-y-auto pr-1 scrollbar-hide">
                         {categorizedProducts.AIRTIME.map(p => (
                           <button 
                             key={p.id} 
@@ -615,17 +750,127 @@ export default function RechargeFlow() {
                             <span className="text-xs font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
                               {p.currency}
                             </span>
+                            {p.costPrice && (
+                              <span className="text-[10px] text-gray-400 mt-1">
+                                ≈ ${p.costPrice.toFixed(2)} USD
+                              </span>
+                            )}
                           </button>
                         ))}
                       </div>
                     ) : (
+                      <div className="text-center py-6">
+                        <Smartphone className="w-10 h-10 mx-auto mb-2 text-gray-300" />
+                        <p className="text-gray-600 font-medium mb-1">No fixed airtime plans</p>
+                        <p className="text-sm text-gray-400">
+                          {priceFilter !== 'ALL' 
+                            ? `No plans available for ~$${priceFilter}` 
+                            : 'Try a different currency or use custom amount'}
+                        </p>
+                      </div>
+                    )}
+
+                    {/* ✅ CUSTOM AMOUNT SECTION */}
+                    {rangedProducts.length > 0 && (
+                      <div className="border-t pt-4 mt-4">
+                        <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
+                          <DollarSign className="w-4 h-4 text-indigo-500" />
+                          Custom Amount
+                        </h4>
+                        
+                        {!showCustomAmount ? (
+                          <button
+                            onClick={() => {
+                              setSelectedRangedProduct(rangedProducts[0]);
+                              setShowCustomAmount(true);
+                              setCustomAmount('');
+                              setCustomAmountError(null);
+                            }}
+                            className="w-full p-4 rounded-xl border-2 border-dashed border-gray-300 
+                                     hover:border-indigo-400 hover:bg-indigo-50 transition-all
+                                     flex items-center justify-center gap-2 text-gray-600"
+                          >
+                            <span className="text-xl font-light">+</span>
+                            <span>Enter Custom Amount</span>
+                            <span className="text-sm text-gray-400">
+                              ({rangedProducts[0].min}-{rangedProducts[0].max} {rangedProducts[0].currency})
+                            </span>
+                          </button>
+                        ) : (
+                          <div className="p-4 rounded-xl border-2 border-indigo-300 bg-indigo-50/50">
+                            {/* Range info */}
+                            <div className="text-sm text-gray-600 mb-3">
+                              Range: <span className="font-medium">{selectedRangedProduct?.min} - {selectedRangedProduct?.max} {selectedRangedProduct?.currency}</span>
+                              {selectedRangedProduct && (
+                                <span className="ml-2 text-indigo-600 text-xs">
+                                  (Min ${MIN_USD_AMOUNT} USD ≈ {getMinLocalAmount(selectedRangedProduct)} {selectedRangedProduct.currency})
+                                </span>
+                              )}
+                            </div>
+                            
+                            {/* Input */}
+                            <div className="flex gap-3">
+                              <div className="flex-1 relative">
+                                <input
+                                  type="number"
+                                  value={customAmount}
+                                  onChange={(e) => handleCustomAmountChange(e.target.value)}
+                                  placeholder={`Amount in ${selectedRangedProduct?.currency || ''}`}
+                                  className={`w-full px-4 py-3 rounded-lg border-2 focus:outline-none text-base ${
+                                    customAmountError 
+                                      ? 'border-red-300 focus:border-red-500' 
+                                      : 'border-gray-200 focus:border-indigo-500'
+                                  }`}
+                                  min={selectedRangedProduct?.min}
+                                  max={selectedRangedProduct?.max}
+                                  step="1"
+                                />
+                                {customAmount && selectedRangedProduct && !customAmountError && (
+                                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-green-600 font-medium">
+                                    ≈ ${calculateUsdCost(parseFloat(customAmount), selectedRangedProduct)?.toFixed(2)} USD
+                                  </div>
+                                )}
+                              </div>
+                              
+                              <button
+                                onClick={handleCustomAmountPurchase}
+                                disabled={!customAmount || !!customAmountError}
+                                className="px-6 py-3 bg-indigo-600 text-white rounded-lg font-medium
+                                           disabled:bg-gray-300 disabled:cursor-not-allowed
+                                           hover:bg-indigo-700 transition-colors min-h-[48px]"
+                              >
+                                Buy
+                              </button>
+                            </div>
+                            
+                            {/* Error message */}
+                            {customAmountError && (
+                              <p className="mt-2 text-sm text-red-600">{customAmountError}</p>
+                            )}
+                            
+                            {/* Cancel button */}
+                            <button
+                              onClick={() => {
+                                setShowCustomAmount(false);
+                                setCustomAmount('');
+                                setCustomAmountError(null);
+                              }}
+                              className="mt-3 text-sm text-gray-500 hover:text-gray-700"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* No products at all */}
+                    {categorizedProducts.AIRTIME.length === 0 && rangedProducts.length === 0 && (
                       <div className="text-center py-10">
                         <Smartphone className="w-12 h-12 mx-auto mb-3 text-gray-300" />
                         <p className="text-gray-600 font-medium mb-2">No airtime plans found</p>
                         <p className="text-sm text-gray-500 mb-4">
-                          {priceFilter !== 'ALL' 
-                            ? `No plans available for ~$${priceFilter}` 
-                            : 'Try selecting a different currency or removing filters'}
+                          Minimum order is ${MIN_USD_AMOUNT} USD
                         </p>
                         {(priceFilter !== 'ALL' || currency) && (
                           <button 
@@ -672,8 +917,15 @@ export default function RechargeFlow() {
                               <div className="font-bold text-gray-800">{p.name}</div>
                               <div className="text-xs text-gray-500 mt-1 line-clamp-2">{p.description || p.amount}</div>
                             </div>
-                            <div className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap group-hover:bg-indigo-100 group-hover:text-indigo-700">
-                              {p.amount}
+                            <div className="text-right">
+                              <div className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap group-hover:bg-indigo-100 group-hover:text-indigo-700">
+                                {p.amount}
+                              </div>
+                              {p.costPrice && (
+                                <div className="text-[10px] text-gray-400 mt-1">
+                                  ≈ ${p.costPrice.toFixed(2)} USD
+                                </div>
+                              )}
                             </div>
                           </div>
                         </div>

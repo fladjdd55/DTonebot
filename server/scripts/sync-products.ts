@@ -116,8 +116,9 @@ export async function syncProducts() {
                                 minAmount: p.min,
                                 maxAmount: p.max,
                                 serviceId: p.subserviceId || 1,
-                                // ✅ NEW: Update cost price
-                                costPrice: p.costPrice || null,
+				costPrice: p.costPrice || null,
+                                costPriceMin: p.costPriceMin || null,
+                                costPriceMax: p.costPriceMax || null,
                                 costCurrency: p.costCurrency || 'USD',
                                 updatedAt: new Date()
                             },
@@ -129,10 +130,12 @@ export async function syncProducts() {
                                 operatorId: op.id,
                                 currency: p.currency,
                                 amount: fixedAmount,
-                                minAmount: p.min,
-                                maxAmount: p.max,
+                                minAmount: p.min, || null,
+                                maxAmount: p.max, || null,
                                 // ✅ NEW: Save cost price
                                 costPrice: p.costPrice || null,
+				costPriceMin: p.costPriceMin || null,
+                                costPriceMax: p.costPriceMax || null,
                                 costCurrency: p.costCurrency || 'USD'
                             }
                         }).catch(err => {

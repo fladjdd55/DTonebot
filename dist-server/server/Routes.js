@@ -651,8 +651,13 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
                 whereClause = { operatorId: opId };
                 if (currency_1)
                     whereClause.currency = String(currency_1).toUpperCase();
-                if (ranged === 'true')
-                    whereClause.type = { contains: 'RANGED' };
+                // ✅ Filter for ranged products if requested
+                if (ranged === 'true') {
+                    whereClause.OR = [
+                        { type: { contains: 'RANGE' } },
+                        { minAmount: { not: null }, maxAmount: { not: null } }
+                    ];
+                }
                 return [4 /*yield*/, db_1.db.product.findMany({
                         where: whereClause,
                         orderBy: { amount: 'asc' }
@@ -660,19 +665,30 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
             case 1:
                 localProducts = _b.sent();
                 if (localProducts.length > 0) {
-                    mapped = localProducts.map(function (p) { return ({
-                        id: p.id,
-                        name: p.name,
-                        type: p.type,
-                        amount: p.amount ? "".concat(p.amount.toFixed(2), " ").concat(p.currency) : 'N/A',
-                        currency: p.currency,
-                        min: p.minAmount || 0,
-                        max: p.maxAmount || 0,
-                        subserviceId: p.serviceId,
-                        benefits: [],
-                        costPrice: p.costPrice,
-                        costCurrency: p.costCurrency,
-                    }); });
+                    mapped = localProducts.map(function (p) {
+                        var _a;
+                        // Determine if product is ranged
+                        var isRanged = ((_a = p.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE')) ||
+                            (p.minAmount !== null && p.maxAmount !== null && p.minAmount !== p.maxAmount);
+                        return {
+                            id: p.id,
+                            name: p.name,
+                            type: p.type,
+                            amount: p.amount ? "".concat(p.amount.toFixed(2), " ").concat(p.currency) : 'N/A',
+                            currency: p.currency,
+                            min: p.minAmount || 0,
+                            max: p.maxAmount || 0,
+                            subserviceId: p.serviceId,
+                            benefits: [],
+                            // ✅ Cost fields (fixed and ranged)
+                            costPrice: p.costPrice,
+                            costPriceMin: p.costPriceMin,
+                            costPriceMax: p.costPriceMax,
+                            costCurrency: p.costCurrency || 'USD',
+                            // ✅ Helper flag for frontend
+                            isRanged: isRanged
+                        };
+                    });
                     return [2 /*return*/, res.json(mapped)];
                 }
                 console.log("[Cache Miss] Fetching live products for Op ".concat(opId));
@@ -686,7 +702,9 @@ app.get('/api/products', function (req, res) { return __awaiter(void 0, void 0, 
                 if (currency_1)
                     apiProducts = apiProducts.filter(function (p) { return p.currency === String(currency_1).toUpperCase(); });
                 if (ranged === 'true')
-                    apiProducts = apiProducts.filter(function (p) { return p.type.includes('RANGED'); });
+                    apiProducts = apiProducts.filter(function (p) {
+                        return p.type.includes('RANGE') || (p.min > 0 && p.max > 0 && p.min !== p.max);
+                    });
                 return [2 /*return*/, res.json(apiProducts)];
             case 3:
                 error_7 = _b.sent();

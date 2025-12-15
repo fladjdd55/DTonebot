@@ -272,28 +272,41 @@ exports.dtoneService = {
                     case 4:
                         console.log("[DTOne] \u2705 Found ".concat(allProducts.length, " total products."));
                         products = allProducts.map(function (p) {
-                            var _a, _b, _c, _d, _e, _f, _g;
+                            var _a, _b, _c, _d, _e, _f;
                             var dest = p.destination || {};
-                            var source = p.source || {}; // ✅ Extract source (cost)
+                            var source = p.source || {};
+                            // Determine if this is a ranged product
+                            var isRanged = ((_a = p.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE')) ||
+                                (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
                             var amount = 'N/A';
+                            var min = 0;
+                            var max = 0;
                             if (typeof dest.amount === 'number') {
+                                // Fixed amount product
                                 amount = "".concat(dest.amount, " ").concat(dest.unit);
                             }
-                            else if ((_a = dest.amount) === null || _a === void 0 ? void 0 : _a.min) {
-                                amount = "".concat(dest.amount.min, "-").concat(dest.amount.max, " ").concat(dest.unit);
+                            else if (((_b = dest.amount) === null || _b === void 0 ? void 0 : _b.min) !== undefined) {
+                                // Ranged amount product
+                                min = dest.amount.min;
+                                max = dest.amount.max || dest.amount.min;
+                                amount = "".concat(min, "-").concat(max, " ").concat(dest.unit);
                             }
-                            var benefits = ((_b = p.benefits) === null || _b === void 0 ? void 0 : _b.map(function (b) { return b.type; })) || [];
-                            // ✅ Extract cost price (source amount)
+                            var benefits = ((_c = p.benefits) === null || _c === void 0 ? void 0 : _c.map(function (b) { return b.type; })) || [];
+                            // ✅ Extract cost price (source amount) - handles both fixed and ranged
                             var costPrice;
-                            var costCurrency;
+                            var costPriceMin;
+                            var costPriceMax;
+                            var costCurrency = source.unit || 'USD';
                             if (typeof source.amount === 'number') {
+                                // Fixed cost
                                 costPrice = source.amount;
-                                costCurrency = source.unit || 'USD';
                             }
-                            else if ((_c = source.amount) === null || _c === void 0 ? void 0 : _c.min) {
-                                // For ranged products, use minimum cost
-                                costPrice = source.amount.min;
-                                costCurrency = source.unit || 'USD';
+                            else if (((_d = source.amount) === null || _d === void 0 ? void 0 : _d.min) !== undefined) {
+                                // Ranged cost
+                                costPriceMin = source.amount.min;
+                                costPriceMax = source.amount.max || source.amount.min;
+                                // For backward compatibility, set costPrice to min
+                                costPrice = costPriceMin;
                             }
                             return {
                                 id: p.id,
@@ -301,13 +314,17 @@ exports.dtoneService = {
                                 type: p.type,
                                 amount: amount,
                                 currency: dest.unit,
-                                min: ((_d = dest.amount) === null || _d === void 0 ? void 0 : _d.min) || 0,
-                                max: ((_e = dest.amount) === null || _e === void 0 ? void 0 : _e.max) || 0,
+                                min: min,
+                                max: max,
                                 benefits: benefits,
-                                subserviceId: (_g = (_f = p.service) === null || _f === void 0 ? void 0 : _f.subservice) === null || _g === void 0 ? void 0 : _g.id,
-                                // ✅ NEW: Cost fields
+                                subserviceId: (_f = (_e = p.service) === null || _e === void 0 ? void 0 : _e.subservice) === null || _f === void 0 ? void 0 : _f.id,
+                                // Cost fields
                                 costPrice: costPrice,
-                                costCurrency: costCurrency
+                                costPriceMin: costPriceMin,
+                                costPriceMax: costPriceMax,
+                                costCurrency: costCurrency,
+                                // Flag for UI
+                                isRanged: isRanged
                             };
                         });
                         return [2 /*return*/, { success: true, data: products }];

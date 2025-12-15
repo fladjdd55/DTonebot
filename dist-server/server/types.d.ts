@@ -23,7 +23,10 @@ export interface Product {
     min: number;
     max: number;
     costPrice?: number;
+    costPriceMin?: number;
+    costPriceMax?: number;
     costCurrency?: string;
+    isRanged?: boolean;
     subserviceId?: number;
     benefits?: string[];
 }

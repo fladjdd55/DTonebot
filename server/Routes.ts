@@ -560,7 +560,14 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
     const opId = Number(operatorId);
     const whereClause: any = { operatorId: opId };
     if (currency) whereClause.currency = String(currency).toUpperCase();
-    if (ranged === 'true') whereClause.type = { contains: 'RANGED' }; 
+    
+    // ✅ Filter for ranged products if requested
+    if (ranged === 'true') {
+      whereClause.OR = [
+        { type: { contains: 'RANGE' } },
+        { minAmount: { not: null }, maxAmount: { not: null } }
+      ];
+    }
 
     const localProducts = await db.product.findMany({
       where: whereClause,
@@ -568,19 +575,30 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
     });
 
     if (localProducts.length > 0) {
-      const mapped = localProducts.map(p => ({
-        id: p.id,
-        name: p.name,
-        type: p.type,
-        amount: p.amount ? `${p.amount.toFixed(2)} ${p.currency}` : 'N/A', 
-        currency: p.currency,
-        min: p.minAmount || 0,
-        max: p.maxAmount || 0,
-        subserviceId: p.serviceId,
-        benefits: [],
-	costPrice: p.costPrice,
-        costCurrency: p.costCurrency,
-      }));
+      const mapped = localProducts.map(p => {
+        // Determine if product is ranged
+        const isRanged = p.type?.includes('RANGE') || 
+                         (p.minAmount !== null && p.maxAmount !== null && p.minAmount !== p.maxAmount);
+        
+        return {
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          amount: p.amount ? `${p.amount.toFixed(2)} ${p.currency}` : 'N/A', 
+          currency: p.currency,
+          min: p.minAmount || 0,
+          max: p.maxAmount || 0,
+          subserviceId: p.serviceId,
+          benefits: [],
+          // ✅ Cost fields (fixed and ranged)
+          costPrice: p.costPrice,
+          costPriceMin: p.costPriceMin,
+          costPriceMax: p.costPriceMax,
+          costCurrency: p.costCurrency || 'USD',
+          // ✅ Helper flag for frontend
+          isRanged
+        };
+      });
       return res.json(mapped);
     }
 
@@ -593,7 +611,9 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
 
     let apiProducts = result.data;
     if (currency) apiProducts = apiProducts.filter(p => p.currency === String(currency).toUpperCase());
-    if (ranged === 'true') apiProducts = apiProducts.filter(p => p.type.includes('RANGED'));
+    if (ranged === 'true') apiProducts = apiProducts.filter(p => 
+      p.type.includes('RANGE') || (p.min > 0 && p.max > 0 && p.min !== p.max)
+    );
 
     return res.json(apiProducts);
 
@@ -602,6 +622,7 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
     return res.status(500).json({ error: error.message });
   }
 });
+
 
 app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
   const { mobile } = req.body;

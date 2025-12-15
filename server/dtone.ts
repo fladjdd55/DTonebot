@@ -173,15 +173,15 @@ export const dtoneService = {
   // C. GET PRODUCTS (UPDATED)
   // ----------------------------------------
   
-  async getProductsForOperator(
-    operatorId: number,
-    serviceId: number = 1,
+   async getProductsForOperator(
+    operatorId: number, 
+    serviceId: number = 1, 
     perPage: number = 100,
     lang: string = 'en'
   ): Promise<ApiResponse<Product[]>> {
-
+    
     console.log(`[DTOne] Fetching Products: Op=${operatorId}, Lang=${lang}`);
-
+    
     try {
       let page = 1;
       let allProducts: any[] = [];
@@ -189,15 +189,15 @@ export const dtoneService = {
 
       while (hasMore) {
         console.log(`   ... fetching page ${page}`);
-
+        
         const response = await dtone.getProducts({
           operator_id: operatorId,
-          service_id: serviceId,
+          service_id: serviceId, 
           page: page,
           per_page: perPage,
           'Accept-Language': lang
         });
-
+        
         const rawList = response.data || response;
         const list = (Array.isArray(rawList) ? rawList : ((rawList as any).payload || [])) as any[];
 
@@ -214,29 +214,43 @@ export const dtoneService = {
 
       const products: Product[] = allProducts.map(p => {
         const dest = p.destination || {};
-        const source = p.source || {};  // ✅ Extract source (cost)
-
+        const source = p.source || {};
+        
+        // Determine if this is a ranged product
+        const isRanged = p.type?.includes('RANGE') || 
+                         (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
+        
         let amount = 'N/A';
-
+        let min = 0;
+        let max = 0;
+        
         if (typeof dest.amount === 'number') {
+          // Fixed amount product
           amount = `${dest.amount} ${dest.unit}`;
-        } else if (dest.amount?.min) {
-           amount = `${dest.amount.min}-${dest.amount.max} ${dest.unit}`;
+        } else if (dest.amount?.min !== undefined) {
+          // Ranged amount product
+          min = dest.amount.min;
+          max = dest.amount.max || dest.amount.min;
+          amount = `${min}-${max} ${dest.unit}`;
         }
 
         const benefits = p.benefits?.map((b: any) => b.type) || [];
 
-        // ✅ Extract cost price (source amount)
+        // ✅ Extract cost price (source amount) - handles both fixed and ranged
         let costPrice: number | undefined;
-        let costCurrency: string | undefined;
-
+        let costPriceMin: number | undefined;
+        let costPriceMax: number | undefined;
+        let costCurrency: string = source.unit || 'USD';
+        
         if (typeof source.amount === 'number') {
+          // Fixed cost
           costPrice = source.amount;
-          costCurrency = source.unit || 'USD';
-        } else if (source.amount?.min) {
-          // For ranged products, use minimum cost
-          costPrice = source.amount.min;
-          costCurrency = source.unit || 'USD';
+        } else if (source.amount?.min !== undefined) {
+          // Ranged cost
+          costPriceMin = source.amount.min;
+          costPriceMax = source.amount.max || source.amount.min;
+          // For backward compatibility, set costPrice to min
+          costPrice = costPriceMin;
         }
 
         return {
@@ -245,13 +259,17 @@ export const dtoneService = {
           type: p.type,
           amount,
           currency: dest.unit,
-          min: dest.amount?.min || 0,
-          max: dest.amount?.max || 0,
-          benefits: benefits,
+          min,
+          max,
+          benefits,
           subserviceId: p.service?.subservice?.id,
-          // ✅ NEW: Cost fields
+          // Cost fields
           costPrice,
-          costCurrency
+          costPriceMin,
+          costPriceMax,
+          costCurrency,
+          // Flag for UI
+          isRanged
         };
       });
 
@@ -262,6 +280,7 @@ export const dtoneService = {
       return { success: false, error: err.error, code: err.code };
     }
   },
+
 
   // ----------------------------------------
   // D. PURCHASE

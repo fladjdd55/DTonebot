@@ -27,8 +27,11 @@ export interface Product {
   currency: string;
   min: number;
   max: number;
-  costPrice?: number;
+  costPrice?: number;       // Fixed cost OR min cost for ranged
+  costPriceMin?: number;    // Min USD cost (for RANGED products)
+  costPriceMax?: number;    // Max USD cost (for RANGED products)
   costCurrency?: string;
+  isRanged?: boolean;
   subserviceId?: number;
   benefits?: string[];
 }

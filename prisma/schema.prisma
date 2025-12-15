@@ -66,12 +66,17 @@ model Product {
   type        String
   serviceId   Int
   operatorId  Int
+   // Destination (what recipient gets - local currency)
   currency    String
-  amount      Float?
-  minAmount   Float?
-  maxAmount   Float?
-  costPrice     Float?   // The USD cost to purchase this product
-  costCurrency  String?  @default("USD") // Usually USD
+  amount      Float?      // Fixed amount (for FIXED products)
+  minAmount   Float?      // Min destination amount (for RANGED products)
+  maxAmount   Float?      // Max destination amount (for RANGED products)
+  
+  // Source (what you pay - usually USD)
+  costPrice     Float?    // Fixed USD cost (for FIXED products)
+  costPriceMin  Float?    // ✅ NEW: Min USD cost (for RANGED products)
+  costPriceMax  Float?    // ✅ NEW: Max USD cost (for RANGED products)
+  costCurrency  String?   @default("USD")
 
   
   createdAt   DateTime @default(now())
