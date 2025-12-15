@@ -9,6 +9,7 @@ export declare const paymentService: {
         productId: number;
         type: string;
         userId?: string;
+        localAmount?: string;
     }, idempotencyKey?: string): Promise<{
         clientSecret: string | null;
         id: string;

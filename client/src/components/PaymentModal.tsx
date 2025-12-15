@@ -150,7 +150,7 @@ export default function PaymentModal({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
-          amount, 
+          customAmount, 
           currency, 
           mobile, 
           productId, 

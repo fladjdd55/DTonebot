@@ -14,12 +14,14 @@ const DTONE_API_KEY = process.env.DTONE_API_KEY;
 const DTONE_API_SECRET = process.env.DTONE_API_SECRET;
 const DTONE_MODE = process.env.DTONE_MODE || 'sandbox';
 
+// 1.15 = 15% profit on top of wholesale rate
+// ✅ UPDATED: Read from .env, default to 1.15 if missing
+const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 if (!DTONE_API_KEY || !DTONE_API_SECRET) {
   throw new Error('FATAL: Missing DTOne credentials in .env file');
 }
 
 dtone.auth(DTONE_API_KEY, DTONE_API_SECRET);
-//dtone.config({ timeout: 90000 });
 
 if (DTONE_MODE === 'production') {
   console.log('[DTOne] 🚀 Mode: PRODUCTION');
@@ -170,7 +172,7 @@ export const dtoneService = {
   },
 
   // ----------------------------------------
-  // C. GET PRODUCTS (UPDATED)
+  // C. GET PRODUCTS (UPDATED WITH MARGIN LOGIC)
   // ----------------------------------------
   
    async getProductsForOperator(
@@ -215,8 +217,8 @@ export const dtoneService = {
       const products: Product[] = allProducts.map(p => {
         const dest = p.destination || {};
         const source = p.source || {};
+        const prices = p.prices || {}; 
         
-        // Determine if this is a ranged product
         const isRanged = p.type?.includes('RANGE') || 
                          (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
         
@@ -225,10 +227,8 @@ export const dtoneService = {
         let max = 0;
         
         if (typeof dest.amount === 'number') {
-          // Fixed amount product
           amount = `${dest.amount} ${dest.unit}`;
         } else if (dest.amount?.min !== undefined) {
-          // Ranged amount product
           min = dest.amount.min;
           max = dest.amount.max || dest.amount.min;
           amount = `${min}-${max} ${dest.unit}`;
@@ -236,21 +236,39 @@ export const dtoneService = {
 
         const benefits = p.benefits?.map((b: any) => b.type) || [];
 
-        // ✅ Extract cost price (source amount) - handles both fixed and ranged
+        // 💰 PRICE CALCULATION LOGIC
+        // Priority: 1. Wholesale * Margin -> 2. Source * Margin
+        
         let costPrice: number | undefined;
         let costPriceMin: number | undefined;
         let costPriceMax: number | undefined;
-        let costCurrency: string = source.unit || 'USD';
+        let costCurrency: string = prices.wholesale?.unit || source.unit || 'USD';
         
-        if (typeof source.amount === 'number') {
-          // Fixed cost
-          costPrice = source.amount;
-        } else if (source.amount?.min !== undefined) {
-          // Ranged cost
-          costPriceMin = source.amount.min;
-          costPriceMax = source.amount.max || source.amount.min;
-          // For backward compatibility, set costPrice to min
-          costPrice = costPriceMin;
+        // ❌ REMOVED: Retail Price Priority
+        // We now rely on Wholesale + Margin
+        
+        // 1. Use WHOLESALE Price + MARGIN
+        if (prices.wholesale?.amount) {
+             if (typeof prices.wholesale.amount === 'number') {
+                 // Fixed
+                 costPrice = prices.wholesale.amount * FALLBACK_MARGIN;
+             } else if (prices.wholesale.amount.min !== undefined) {
+                 // Ranged
+                 costPriceMin = prices.wholesale.amount.min * FALLBACK_MARGIN;
+                 costPriceMax = (prices.wholesale.amount.max || prices.wholesale.amount.min) * FALLBACK_MARGIN;
+                 costPrice = costPriceMin; 
+             }
+        } 
+        
+        // 2. Fallback to SOURCE Amount + MARGIN (If wholesale is missing)
+        if (costPrice === undefined && costPriceMin === undefined) {
+             if (typeof source.amount === 'number') {
+                costPrice = source.amount * FALLBACK_MARGIN;
+             } else if (source.amount?.min !== undefined) {
+                costPriceMin = source.amount.min * FALLBACK_MARGIN;
+                costPriceMax = (source.amount.max || source.amount.min) * FALLBACK_MARGIN;
+                costPrice = costPriceMin;
+             }
         }
 
         return {
@@ -263,12 +281,10 @@ export const dtoneService = {
           max,
           benefits,
           subserviceId: p.service?.subservice?.id,
-          // Cost fields
           costPrice,
           costPriceMin,
           costPriceMax,
           costCurrency,
-          // Flag for UI
           isRanged
         };
       });
@@ -314,6 +330,7 @@ export const dtoneService = {
 
       const isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
       
+      // ✅ Correct Calculation Mode for Ranged Products
       if (isRanged && amount > 0 && unit) {
         payload.calculation_mode = 'DESTINATION_AMOUNT';
         payload.destination = {

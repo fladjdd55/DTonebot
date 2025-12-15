@@ -41,7 +41,8 @@ export const paymentService = {
       mobile: string; 
       productId: number; 
       type: string;
-      userId?: string; // Optional user ID for logged-in users
+      userId?: string; 
+      localAmount?: string; // ✅ ADDED: Support for Local Currency Amount
     },
     idempotencyKey?: string
   ) {
@@ -57,7 +58,8 @@ export const paymentService = {
             mobile: metadata?.mobile || '',
             productId: metadata?.productId?.toString() || '',
             type: metadata?.type || '',
-            userId: metadata?.userId || '' // Store user ID in payment metadata
+            userId: metadata?.userId || '',
+            localAmount: metadata?.localAmount || '' // ✅ ADDED: Pass to Stripe
           }
         },
         {
@@ -97,4 +99,3 @@ export const paymentService = {
     }
   }
 };
-

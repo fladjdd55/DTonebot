@@ -60,11 +60,13 @@ dotenv_1.default.config();
 var DTONE_API_KEY = process.env.DTONE_API_KEY;
 var DTONE_API_SECRET = process.env.DTONE_API_SECRET;
 var DTONE_MODE = process.env.DTONE_MODE || 'sandbox';
+// 1.15 = 15% profit on top of wholesale rate
+// ✅ UPDATED: Read from .env, default to 1.15 if missing
+var FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 if (!DTONE_API_KEY || !DTONE_API_SECRET) {
     throw new Error('FATAL: Missing DTOne credentials in .env file');
 }
 dtone_1.default.auth(DTONE_API_KEY, DTONE_API_SECRET);
-//dtone.config({ timeout: 90000 });
 if (DTONE_MODE === 'production') {
     console.log('[DTOne] 🚀 Mode: PRODUCTION');
     dtone_1.default.server('https://dvs-api.dtone.com/v1');
@@ -225,7 +227,7 @@ exports.dtoneService = {
         });
     },
     // ----------------------------------------
-    // C. GET PRODUCTS (UPDATED)
+    // C. GET PRODUCTS (UPDATED WITH MARGIN LOGIC)
     // ----------------------------------------
     getProductsForOperator: function (operatorId_1) {
         return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, lang) {
@@ -272,41 +274,55 @@ exports.dtoneService = {
                     case 4:
                         console.log("[DTOne] \u2705 Found ".concat(allProducts.length, " total products."));
                         products = allProducts.map(function (p) {
-                            var _a, _b, _c, _d, _e, _f;
+                            var _a, _b, _c, _d, _e, _f, _g, _h;
                             var dest = p.destination || {};
                             var source = p.source || {};
-                            // Determine if this is a ranged product
+                            var prices = p.prices || {};
                             var isRanged = ((_a = p.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE')) ||
                                 (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
                             var amount = 'N/A';
                             var min = 0;
                             var max = 0;
                             if (typeof dest.amount === 'number') {
-                                // Fixed amount product
                                 amount = "".concat(dest.amount, " ").concat(dest.unit);
                             }
                             else if (((_b = dest.amount) === null || _b === void 0 ? void 0 : _b.min) !== undefined) {
-                                // Ranged amount product
                                 min = dest.amount.min;
                                 max = dest.amount.max || dest.amount.min;
                                 amount = "".concat(min, "-").concat(max, " ").concat(dest.unit);
                             }
                             var benefits = ((_c = p.benefits) === null || _c === void 0 ? void 0 : _c.map(function (b) { return b.type; })) || [];
-                            // ✅ Extract cost price (source amount) - handles both fixed and ranged
+                            // 💰 PRICE CALCULATION LOGIC
+                            // Priority: 1. Wholesale * Margin -> 2. Source * Margin
                             var costPrice;
                             var costPriceMin;
                             var costPriceMax;
-                            var costCurrency = source.unit || 'USD';
-                            if (typeof source.amount === 'number') {
-                                // Fixed cost
-                                costPrice = source.amount;
+                            var costCurrency = ((_d = prices.wholesale) === null || _d === void 0 ? void 0 : _d.unit) || source.unit || 'USD';
+                            // ❌ REMOVED: Retail Price Priority
+                            // We now rely on Wholesale + Margin
+                            // 1. Use WHOLESALE Price + MARGIN
+                            if ((_e = prices.wholesale) === null || _e === void 0 ? void 0 : _e.amount) {
+                                if (typeof prices.wholesale.amount === 'number') {
+                                    // Fixed
+                                    costPrice = prices.wholesale.amount * FALLBACK_MARGIN;
+                                }
+                                else if (prices.wholesale.amount.min !== undefined) {
+                                    // Ranged
+                                    costPriceMin = prices.wholesale.amount.min * FALLBACK_MARGIN;
+                                    costPriceMax = (prices.wholesale.amount.max || prices.wholesale.amount.min) * FALLBACK_MARGIN;
+                                    costPrice = costPriceMin;
+                                }
                             }
-                            else if (((_d = source.amount) === null || _d === void 0 ? void 0 : _d.min) !== undefined) {
-                                // Ranged cost
-                                costPriceMin = source.amount.min;
-                                costPriceMax = source.amount.max || source.amount.min;
-                                // For backward compatibility, set costPrice to min
-                                costPrice = costPriceMin;
+                            // 2. Fallback to SOURCE Amount + MARGIN (If wholesale is missing)
+                            if (costPrice === undefined && costPriceMin === undefined) {
+                                if (typeof source.amount === 'number') {
+                                    costPrice = source.amount * FALLBACK_MARGIN;
+                                }
+                                else if (((_f = source.amount) === null || _f === void 0 ? void 0 : _f.min) !== undefined) {
+                                    costPriceMin = source.amount.min * FALLBACK_MARGIN;
+                                    costPriceMax = (source.amount.max || source.amount.min) * FALLBACK_MARGIN;
+                                    costPrice = costPriceMin;
+                                }
                             }
                             return {
                                 id: p.id,
@@ -317,13 +333,11 @@ exports.dtoneService = {
                                 min: min,
                                 max: max,
                                 benefits: benefits,
-                                subserviceId: (_f = (_e = p.service) === null || _e === void 0 ? void 0 : _e.subservice) === null || _f === void 0 ? void 0 : _f.id,
-                                // Cost fields
+                                subserviceId: (_h = (_g = p.service) === null || _g === void 0 ? void 0 : _g.subservice) === null || _h === void 0 ? void 0 : _h.id,
                                 costPrice: costPrice,
                                 costPriceMin: costPriceMin,
                                 costPriceMax: costPriceMax,
                                 costCurrency: costCurrency,
-                                // Flag for UI
                                 isRanged: isRanged
                             };
                         });
@@ -364,6 +378,7 @@ exports.dtoneService = {
                             callback_url: callbackUrl
                         };
                         isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
+                        // ✅ Correct Calculation Mode for Ranged Products
                         if (isRanged && amount > 0 && unit) {
                             payload.calculation_mode = 'DESTINATION_AMOUNT';
                             payload.destination = {

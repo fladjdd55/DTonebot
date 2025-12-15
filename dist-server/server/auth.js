@@ -44,7 +44,10 @@ exports.authService = void 0;
 var bcryptjs_1 = __importDefault(require("bcryptjs"));
 var jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 var db_1 = require("./db");
-var JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
+var JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET must be set in production');
+}
 var JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
 // Password requirements
 var MIN_PASSWORD_LENGTH = 8;

@@ -20,45 +20,79 @@ export interface Product {
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 const API_URL = `${BASE_URL}/api`;
 
-// Token storage key (must match authApi.ts)
-const TOKEN_KEY = 'auth_token';
-
-// Helper to get stored token
-const getStoredToken = (): string | null => {
-  return localStorage.getItem(TOKEN_KEY);
-};
-
-// Helper to build headers with optional auth
-const getHeaders = (): HeadersInit => {
-  const headers: HeadersInit = { 'Content-Type': 'application/json' };
-  const token = getStoredToken();
-  if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
-  }
-  return headers;
-};
-
-// ✅ FIX: Define a reasonable timeout (e.g., 90s)
 const REQUEST_TIMEOUT_MS = 90000;
 
-/**
- * Helper to wrap fetch with a timeout
- */
-async function fetchWithTimeout(resource: string, options: RequestInit = {}) {
-  const { signal, ...rest } = options;
-  
+// ==================================================================
+// 🔐 TOKEN MANAGEMENT (In-Memory)
+// ==================================================================
+let accessToken: string | null = null;
+
+export const setAccessToken = (token: string | null) => {
+  accessToken = token;
+};
+
+export const getAccessToken = () => accessToken;
+
+// ==================================================================
+// 🌐 SMART FETCH (Handles Auth + Refresh + Timeout)
+// ==================================================================
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  // 1. Prepare Headers (Attach Token if exists)
+  const headers = new Headers(options.headers || {});
+  headers.set('Content-Type', 'application/json');
+  if (accessToken) {
+    headers.set('Authorization', `Bearer ${accessToken}`);
+  }
+
+  // 2. Prepare Config (Timeout + Credentials)
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  
-  // Allow passing an external signal if needed, otherwise use our controller
-  const requestSignal = signal || controller.signal;
+  const signal = options.signal || controller.signal;
+
+  const config: RequestInit = {
+    ...options,
+    headers,
+    signal,
+    credentials: 'include', // ✅ Critical: Sends Cookies (Refresh Token)
+  };
 
   try {
-    const response = await fetch(resource, {
-      ...rest,
-      signal: requestSignal
-    });
+    let response = await fetch(url, config);
     clearTimeout(id);
+
+    // 3. 🔄 INTERCEPT 401: Attempt Token Refresh
+    if (response.status === 401) {
+      try {
+        // Call Refresh Endpoint (Uses HttpOnly Cookie)
+        const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
+          method: 'POST',
+          credentials: 'include' 
+        });
+
+        if (refreshRes.ok) {
+          const data = await refreshRes.json();
+          if (data.accessToken) {
+            // ✅ Success: Update Memory Token & Retry Original Request
+            setAccessToken(data.accessToken);
+            
+            headers.set('Authorization', `Bearer ${data.accessToken}`);
+            const retryConfig = { ...config, headers };
+            
+            response = await fetch(url, retryConfig);
+          } else {
+            throw new Error('No access token returned');
+          }
+        } else {
+          throw new Error('Refresh failed');
+        }
+      } catch (err) {
+        // ❌ Refresh Failed: Force Logout
+        setAccessToken(null);
+        window.location.href = '/login'; // Redirect to login
+        return response; // Return original 401 so caller knows it failed
+      }
+    }
+
     return response;
   } catch (error: any) {
     clearTimeout(id);
@@ -69,11 +103,14 @@ async function fetchWithTimeout(resource: string, options: RequestInit = {}) {
   }
 }
 
+// ==================================================================
+// 🚀 API METHODS
+// ==================================================================
+
 export const rechargeApi = {
   async lookup(mobile: string) {
-    const res = await fetchWithTimeout(`${API_URL}/lookup`, {
+    const res = await fetchWithAuth(`${API_URL}/lookup`, {
       method: 'POST',
-      headers: getHeaders(), // ✅ Include auth
       body: JSON.stringify({ mobile })
     });
     const data = await res.json();
@@ -81,7 +118,6 @@ export const rechargeApi = {
     return data;
   },
 
-  // ✅ UPDATED: Uses GET and Query Strings
   async getProducts(operatorId: number, currency?: string, ranged?: boolean) {
     const params = new URLSearchParams();
     params.append('operatorId', operatorId.toString());
@@ -89,9 +125,8 @@ export const rechargeApi = {
     if (currency) params.append('currency', currency);
     if (ranged) params.append('ranged', 'true');
 
-    const res = await fetchWithTimeout(`${API_URL}/products?${params.toString()}`, {
-      method: 'GET',
-      headers: getHeaders() // ✅ Include auth
+    const res = await fetchWithAuth(`${API_URL}/products?${params.toString()}`, {
+      method: 'GET'
     });
     
     const data = await res.json();
@@ -100,9 +135,8 @@ export const rechargeApi = {
   },
 
   async purchase(productId: number, mobile: string, amount: number, unit: string, type: string, paymentId?: string) {
-    const res = await fetchWithTimeout(`${API_URL}/purchase`, {
+    const res = await fetchWithAuth(`${API_URL}/purchase`, {
       method: 'POST',
-      headers: getHeaders(), // ✅ Include auth - THIS IS THE KEY FIX
       body: JSON.stringify({ productId, mobile, amount, unit, type, paymentId })
     });
     const data = await res.json();
@@ -110,14 +144,12 @@ export const rechargeApi = {
     return data;
   },
 
-  // ✅ NEW METHOD: Check Transaction Status
   async checkStatus(paymentId: string) {
-    const res = await fetchWithTimeout(`${API_URL}/transaction/${paymentId}`, {
-      method: 'GET',
-      headers: getHeaders() // ✅ Include auth
+    const res = await fetchWithAuth(`${API_URL}/transaction/${paymentId}`, {
+      method: 'GET'
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to check status');
     return data;
   }
-}
+};

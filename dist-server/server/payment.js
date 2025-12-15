@@ -101,7 +101,8 @@ exports.paymentService = {
                                     mobile: (metadata === null || metadata === void 0 ? void 0 : metadata.mobile) || '',
                                     productId: ((_a = metadata === null || metadata === void 0 ? void 0 : metadata.productId) === null || _a === void 0 ? void 0 : _a.toString()) || '',
                                     type: (metadata === null || metadata === void 0 ? void 0 : metadata.type) || '',
-                                    userId: (metadata === null || metadata === void 0 ? void 0 : metadata.userId) || '' // Store user ID in payment metadata
+                                    userId: (metadata === null || metadata === void 0 ? void 0 : metadata.userId) || '',
+                                    localAmount: (metadata === null || metadata === void 0 ? void 0 : metadata.localAmount) || '' // ✅ ADDED: Pass to Stripe
                                 }
                             }, {
                                 idempotencyKey: idempotencyKey

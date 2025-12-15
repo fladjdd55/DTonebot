@@ -45,27 +45,24 @@ exports.optionalAuth = optionalAuth;
 var jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 var db_1 = require("../db");
 var JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
-/**
- * Required Auth Middleware
- * - Blocks request if no valid token
- * - Use for protected routes
- */
 function requireAuth(req, res, next) {
     return __awaiter(this, void 0, void 0, function () {
-        var authHeader, token, decoded, user, error_1;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
+        var authHeader, cookieToken, token, decoded, user, error_1;
+        var _a;
+        return __generator(this, function (_b) {
+            switch (_b.label) {
                 case 0:
-                    _a.trys.push([0, 2, , 3]);
+                    _b.trys.push([0, 2, , 3]);
                     authHeader = req.headers.authorization;
-                    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+                    cookieToken = (_a = req.cookies) === null || _a === void 0 ? void 0 : _a.auth_token;
+                    token = cookieToken || (authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
+                    if (!token) {
                         return [2 /*return*/, res.status(401).json({ error: 'Authentication required' })];
                     }
-                    token = authHeader.split(' ')[1];
                     decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
-                    return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.userId } })];
+                    return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.id } })];
                 case 1:
-                    user = _a.sent();
+                    user = _b.sent();
                     if (!user) {
                         return [2 /*return*/, res.status(401).json({ error: 'User not found' })];
                     }
@@ -78,43 +75,28 @@ function requireAuth(req, res, next) {
                     next();
                     return [3 /*break*/, 3];
                 case 2:
-                    error_1 = _a.sent();
-                    if (error_1.name === 'TokenExpiredError') {
-                        return [2 /*return*/, res.status(401).json({ error: 'Token expired' })];
-                    }
-                    if (error_1.name === 'JsonWebTokenError') {
-                        return [2 /*return*/, res.status(401).json({ error: 'Invalid token' })];
-                    }
+                    error_1 = _b.sent();
                     return [2 /*return*/, res.status(401).json({ error: 'Authentication failed' })];
                 case 3: return [2 /*return*/];
             }
         });
     });
 }
-/**
- * Optional Auth Middleware
- * - Extracts user if token present, but doesn't block
- * - Use for routes that work for both guests and logged-in users
- */
 function optionalAuth(req, res, next) {
     return __awaiter(this, void 0, void 0, function () {
-        var authHeader, token, decoded, user, _a, error_2;
+        var authHeader, cookieToken, token, decoded, user, error_2;
+        var _a;
         return __generator(this, function (_b) {
             switch (_b.label) {
                 case 0:
-                    _b.trys.push([0, 5, , 6]);
+                    _b.trys.push([0, 3, , 4]);
                     authHeader = req.headers.authorization;
-                    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-                        // No token - continue as guest
-                        return [2 /*return*/, next()];
-                    }
-                    token = authHeader.split(' ')[1];
-                    _b.label = 1;
-                case 1:
-                    _b.trys.push([1, 3, , 4]);
+                    cookieToken = (_a = req.cookies) === null || _a === void 0 ? void 0 : _a.auth_token;
+                    token = cookieToken || (authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
+                    if (!token) return [3 /*break*/, 2];
                     decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
-                    return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.userId } })];
-                case 2:
+                    return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.id } })];
+                case 1:
                     user = _b.sent();
                     if (user) {
                         req.user = {
@@ -124,19 +106,15 @@ function optionalAuth(req, res, next) {
                             phone: user.phone
                         };
                     }
+                    _b.label = 2;
+                case 2:
+                    next();
                     return [3 /*break*/, 4];
                 case 3:
-                    _a = _b.sent();
-                    return [3 /*break*/, 4];
-                case 4:
-                    next();
-                    return [3 /*break*/, 6];
-                case 5:
                     error_2 = _b.sent();
-                    // On any error, continue as guest
                     next();
-                    return [3 /*break*/, 6];
-                case 6: return [2 /*return*/];
+                    return [3 /*break*/, 4];
+                case 4: return [2 /*return*/];
             }
         });
     });
