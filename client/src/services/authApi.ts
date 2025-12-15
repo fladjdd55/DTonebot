@@ -1,5 +1,7 @@
 // client/src/services/authApi.ts
 
+import { getAccessToken } from './api';
+
 const API_URL = '/api/auth';
 
 // ✅ ADDED: Export interfaces
@@ -30,22 +32,33 @@ const handleResponse = async (response: Response) => {
   return data;
 };
 
+// ✅ Helper to get auth headers
+const getAuthHeaders = (): Record<string, string> => {
+  const token = getAccessToken();
+  return {
+    'Content-Type': 'application/json',
+    ...(token && { 'Authorization': `Bearer ${token}` })
+  };
+};
+
 export const authApi = {
   // LOGIN
-  login: async (credentials: any) => {
+  login: async (credentials: { email: string; password: string }) => {
     const response = await fetch(`${API_URL}/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', // ✅ Required for cookies
       body: JSON.stringify(credentials),
     });
     return handleResponse(response);
   },
 
   // REGISTER
-  register: async (userData: any) => {
+  register: async (userData: { email: string; password: string; name?: string }) => {
     const response = await fetch(`${API_URL}/register`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      credentials: 'include', // ✅ Required for cookies
       body: JSON.stringify(userData),
     });
     return handleResponse(response);
@@ -55,7 +68,8 @@ export const authApi = {
   logout: async () => {
     const response = await fetch(`${API_URL}/logout`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
+      credentials: 'include', // ✅ Required for cookies
     });
     return handleResponse(response);
   },
@@ -64,26 +78,29 @@ export const authApi = {
   getCurrentUser: async () => {
     const response = await fetch(`${API_URL}/me`, {
       method: 'GET',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(), // ✅ Fixed: Now includes token
+      credentials: 'include',    // ✅ Required for cookies
     });
     return handleResponse(response);
   },
 
   // UPDATE PROFILE
-  updateProfile: async (data: any) => {
+  updateProfile: async (data: { name?: string; phone?: string }) => {
     const response = await fetch(`${API_URL}/profile`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(), // ✅ Fixed: Now includes token
+      credentials: 'include',
       body: JSON.stringify(data),
     });
     return handleResponse(response);
   },
 
   // CHANGE PASSWORD
-  changePassword: async (data: any) => {
+  changePassword: async (data: { currentPassword: string; newPassword: string }) => {
     const response = await fetch(`${API_URL}/change-password`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(), // ✅ Fixed: Now includes token
+      credentials: 'include',
       body: JSON.stringify(data),
     });
     return handleResponse(response);
@@ -92,9 +109,11 @@ export const authApi = {
   // GET TRANSACTIONS
   getTransactions: async (page = 1) => {
     const response = await fetch(`/api/user/transactions?page=${page}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+      method: 'GET',
+      headers: getAuthHeaders(), // ✅ Fixed: Now includes token
+      credentials: 'include',
     });
     return handleResponse(response);
   }
 };
+

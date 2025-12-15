@@ -383,12 +383,13 @@ app.post('/api/auth/refresh', async (req: Request, res: Response): Promise<any> 
 });
 
 app.post('/api/auth/logout', async (req, res) => {
-  const refreshToken = req.cookies.refresh_token;
-  if (refreshToken) {
-    await authService.revokeToken(refreshToken);
-  }
-  res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
-  res.json({ message: 'Logged out successfully' });
+  // Cookie path must match
+  res.clearCookie('refresh_token', {
+    path: '/api/auth/refresh',
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict'
+  });
 });
 
 app.get('/api/auth/me', requireAuth, async (req: Request, res: Response): Promise<any> => {
@@ -420,7 +421,7 @@ app.get('/api/user/transactions', requireAuth, async (req: Request, res: Respons
     db.transaction.count({ where: { userId: req.user!.id } })
   ]);
   
-  return res.json({ transactions, pagination: { page, limit, total } });
+  return res.json({ transactions, pagination: { page, limit, total }, pages: Math.ceil(total / limit) });
 });
 
 // ==================================================================

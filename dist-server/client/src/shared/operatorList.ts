@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
- * Timestamp: 2025-12-15T06:51:04.636Z
+ * Timestamp: 2025-12-15T19:12:24.077Z
  * * Run 'npx ts-node server/scripts/sync-operators.ts' to update.
  */
 
@@ -550,12 +550,6 @@ export const OPERATORS: Operator[] = [
     "regions": null
   },
   {
-    "id": 657,
-    "name": "Telesur Suriname",
-    "countryCode": "SUR",
-    "regions": null
-  },
-  {
     "id": 662,
     "name": "Vodafone Turkey",
     "countryCode": "TUR",
@@ -769,6 +763,18 @@ export const OPERATORS: Operator[] = [
     "id": 1327,
     "name": "Tri Indonesia",
     "countryCode": "IDN",
+    "regions": null
+  },
+  {
+    "id": 1332,
+    "name": "MTS Russia",
+    "countryCode": "RUS",
+    "regions": null
+  },
+  {
+    "id": 1355,
+    "name": "T2 Russia",
+    "countryCode": "RUS",
     "regions": null
   },
   {
@@ -1027,12 +1033,6 @@ export const OPERATORS: Operator[] = [
     "id": 1443,
     "name": "NTC Nepal",
     "countryCode": "NPL",
-    "regions": null
-  },
-  {
-    "id": 1444,
-    "name": "Movistar Peru",
-    "countryCode": "PER",
     "regions": null
   },
   {
@@ -2563,6 +2563,12 @@ export const OPERATORS: Operator[] = [
     "regions": null
   },
   {
+    "id": 2673,
+    "name": "MetroPCS Retail USA",
+    "countryCode": "USA",
+    "regions": null
+  },
+  {
     "id": 2677,
     "name": "Lyca PIN Netherlands",
     "countryCode": "NLD",
@@ -2644,6 +2650,12 @@ export const OPERATORS: Operator[] = [
     "id": 2768,
     "name": "Fonic PIN Germany",
     "countryCode": "DEU",
+    "regions": null
+  },
+  {
+    "id": 2772,
+    "name": "Cricket Retail USA",
+    "countryCode": "USA",
     "regions": null
   },
   {
@@ -3586,12 +3598,6 @@ export const OPERATORS: Operator[] = [
     "regions": null
   },
   {
-    "id": 4513,
-    "name": "Du Postpaid United Arab Emirates",
-    "countryCode": "ARE",
-    "regions": null
-  },
-  {
     "id": 4563,
     "name": "Safaricom Ethiopia",
     "countryCode": "ETH",
@@ -3694,30 +3700,6 @@ export const OPERATORS: Operator[] = [
     "regions": null
   },
   {
-    "id": 4884,
-    "name": "Jazz Pakistan Postpaid",
-    "countryCode": "PAK",
-    "regions": null
-  },
-  {
-    "id": 4885,
-    "name": "Telenor Pakistan Postpaid",
-    "countryCode": "PAK",
-    "regions": null
-  },
-  {
-    "id": 4886,
-    "name": "Ufone Pakistan Postpaid",
-    "countryCode": "PAK",
-    "regions": null
-  },
-  {
-    "id": 4887,
-    "name": "Zong Pakistan Postpaid",
-    "countryCode": "PAK",
-    "regions": null
-  },
-  {
     "id": 5437,
     "name": "Somnet Somalia",
     "countryCode": "SOM",
@@ -3799,24 +3781,6 @@ export const OPERATORS: Operator[] = [
     "id": 5959,
     "name": "Free France",
     "countryCode": "FRA",
-    "regions": null
-  },
-  {
-    "id": 5965,
-    "name": "Movitel Mozambique",
-    "countryCode": "MOZ",
-    "regions": null
-  },
-  {
-    "id": 5966,
-    "name": "Flash Mobile Peru",
-    "countryCode": "PER",
-    "regions": null
-  },
-  {
-    "id": 5992,
-    "name": "Cricket USA Open",
-    "countryCode": "USA",
     "regions": null
   }
 ];

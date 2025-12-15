@@ -14,9 +14,9 @@ export function dtoneIpWhitelist(req: Request, res: Response, next: NextFunction
                 || req.socket?.remoteAddress 
                 || '';
 
-  if (DTONE_ALLOWED_IPS.length === 0) {
-    console.warn('[Security] ⚠️ DTONE_WHITELIST_IPS not configured!');
-    return res.status(500).send('Server misconfigured');
+  if (DTONE_ALLOWED_IPS.length === 0 || !DTONE_ALLOWED_IPS.includes(clientIp)) {
+  console.error(`[Security] Blocked webhook from ${clientIp}`);
+  return res.status(403).send('Forbidden'); // Don't reveal why
   }
 
   if (!DTONE_ALLOWED_IPS.includes(clientIp)) {

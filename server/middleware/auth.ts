@@ -5,6 +5,8 @@ import jwt from 'jsonwebtoken';
 import { db } from '../db';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
+//const JWT_SECRET = process.env.JWT_SECRET;
+//if (!JWT_SECRET) throw new Error('FATAL: JWT_SECRET must be set');
 
 // ✅ FIX: Global Declaration to ensure req.user exists everywhere
 declare global {

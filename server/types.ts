@@ -27,6 +27,7 @@ export interface Product {
   currency: string;
   min: number;
   max: number;
+  // Cost fields for margin calculation
   costPrice?: number;       // Fixed cost OR min cost for ranged
   costPriceMin?: number;    // Min USD cost (for RANGED products)
   costPriceMax?: number;    // Max USD cost (for RANGED products)
@@ -39,7 +40,8 @@ export interface Product {
 export interface TransactionResult {
   id: number;
   status: string;
-  statusId?: number; // 👈 ✅ ADD THIS FIELD
+  statusId?: number; // ✅ ADDED: Required for Routes.ts to check success (7) vs decline (3/9)
   externalId: string;
   message?: string;
 }
+

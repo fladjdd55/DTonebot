@@ -13,9 +13,9 @@ function dtoneIpWhitelist(req, res, next) {
     var clientIp = (typeof forwarded === 'string' ? forwarded.split(',')[0].trim() : '')
         || ((_a = req.socket) === null || _a === void 0 ? void 0 : _a.remoteAddress)
         || '';
-    if (DTONE_ALLOWED_IPS.length === 0) {
-        console.warn('[Security] ⚠️ DTONE_WHITELIST_IPS not configured!');
-        return res.status(500).send('Server misconfigured');
+    if (DTONE_ALLOWED_IPS.length === 0 || !DTONE_ALLOWED_IPS.includes(clientIp)) {
+        console.error("[Security] Blocked webhook from ".concat(clientIp));
+        return res.status(403).send('Forbidden'); // Don't reveal why
     }
     if (!DTONE_ALLOWED_IPS.includes(clientIp)) {
         console.warn("[Security] \uD83D\uDEAB Blocked DTOne callback from unauthorized IP: ".concat(clientIp));

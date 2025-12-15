@@ -468,21 +468,15 @@ app.post('/api/auth/refresh', function (req, res) { return __awaiter(void 0, voi
     });
 }); });
 app.post('/api/auth/logout', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var refreshToken;
     return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0:
-                refreshToken = req.cookies.refresh_token;
-                if (!refreshToken) return [3 /*break*/, 2];
-                return [4 /*yield*/, auth_2.authService.revokeToken(refreshToken)];
-            case 1:
-                _a.sent();
-                _a.label = 2;
-            case 2:
-                res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
-                res.json({ message: 'Logged out successfully' });
-                return [2 /*return*/];
-        }
+        // Cookie path must match
+        res.clearCookie('refresh_token', {
+            path: '/api/auth/refresh',
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict'
+        });
+        return [2 /*return*/];
     });
 }); });
 app.get('/api/auth/me', auth_1.requireAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
@@ -533,7 +527,7 @@ app.get('/api/user/transactions', auth_1.requireAuth, function (req, res) { retu
                     ])];
             case 1:
                 _a = _b.sent(), transactions = _a[0], total = _a[1];
-                return [2 /*return*/, res.json({ transactions: transactions, pagination: { page: page, limit: limit, total: total } })];
+                return [2 /*return*/, res.json({ transactions: transactions, pagination: { page: page, limit: limit, total: total }, pages: Math.ceil(total / limit) })];
         }
     });
 }); });
