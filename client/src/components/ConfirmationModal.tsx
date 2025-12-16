@@ -1,127 +1,103 @@
-import { X, CheckCircle, Phone, Package, DollarSign, AlertCircle } from 'lucide-react';
+import { X, ArrowRight, ShieldCheck } from 'lucide-react';
+import type { Product } from '../services/api';
 
-interface ConfirmationModalProps {
+interface Props {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  product: {
-    id: number;
-    name: string;
-    amount: string;
-    currency: string;
-    type: string;
-    description?: string;
-  } | null;
+  product: Product;
   mobile: string;
   operatorName: string;
+  amount: number;      // Face Value (e.g., 500 HTG)
+  totalCost: number;   // USD Cost (e.g., $5.75)
 }
 
-const ConfirmationModal = ({
-  isOpen,
-  onClose,
-  onConfirm,
-  product,
-  mobile,
-  operatorName
-}: ConfirmationModalProps) => {
-  if (!isOpen || !product) return null;
-
-  const price = product.amount.split(' ')[0];
-  const currency = product.amount.split(' ')[1] || product.currency;
+export default function ConfirmationModal({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  product, 
+  mobile, 
+  operatorName,
+  amount,
+  totalCost 
+}: Props) {
+  if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4 animate-in fade-in duration-200 safe-bottom">
-      <div className="bg-white sm:rounded-2xl rounded-t-3xl shadow-2xl w-full max-w-md overflow-hidden animate-in slide-in-from-bottom sm:zoom-in duration-200 overscroll-contain">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+      <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden transform transition-all scale-100">
+        
         {/* Header */}
-        <div className="bg-gradient-to-r from-indigo-600 to-blue-600 p-6 text-white relative">
-          <button 
-            onClick={onClose}
-            className="absolute top-3 right-3 text-white/80 hover:text-white transition-colors p-2 min-w-[44px] min-h-[44px] flex items-center justify-center"
-          >
-            <X className="w-5 h-5" />
+        <div className="bg-gray-50 p-4 border-b flex justify-between items-center">
+          <h3 className="font-bold text-gray-900">Confirm Transaction</h3>
+          <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded-full">
+            <X className="w-5 h-5 text-gray-500" />
           </button>
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-white/20 rounded-full flex items-center justify-center">
-              <CheckCircle className="w-6 h-6" />
-            </div>
-            <div>
-              <h3 className="text-xl font-bold">Confirm Your Purchase</h3>
-              <p className="text-sm text-white/80">Review details before payment</p>
-            </div>
-          </div>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4">
-          {/* Product Details */}
-          <div className="bg-gray-50 rounded-xl p-4 space-y-3">
-            <div className="flex items-start gap-3">
-              <Package className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                  Product
-                </p>
-                <p className="font-bold text-gray-900">{product.name}</p>
-                {product.description && (
-                  <p className="text-sm text-gray-600 mt-1">{product.description}</p>
-                )}
-              </div>
+        <div className="p-6 space-y-6">
+          
+          {/* Operator Info */}
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-indigo-100 rounded-full flex items-center justify-center text-indigo-600 font-bold text-xl">
+              {operatorName.charAt(0)}
             </div>
-
-            <div className="flex items-start gap-3">
-              <Phone className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                  Recipient
-                </p>
-                <p className="font-bold text-gray-900">{mobile}</p>
-                <p className="text-sm text-gray-600">{operatorName}</p>
-              </div>
-            </div>
-
-            <div className="flex items-start gap-3">
-              <DollarSign className="w-5 h-5 text-indigo-600 mt-0.5 shrink-0" />
-              <div className="flex-1">
-                <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
-                  Amount
-                </p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {price} <span className="text-lg text-gray-500">{currency}</span>
-                </p>
-              </div>
+            <div>
+              <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold">Operator</p>
+              <p className="font-bold text-gray-900">{operatorName}</p>
             </div>
           </div>
 
-          {/* Important Notice */}
-          <div className="flex gap-3 p-4 bg-blue-50 rounded-lg border border-blue-100">
-            <AlertCircle className="w-5 h-5 text-blue-600 shrink-0 mt-0.5" />
-            <div className="text-sm text-blue-900">
-              <p className="font-semibold mb-1">Please verify the details</p>
-              <p className="text-blue-700">
-                Make sure the phone number and amount are correct. This transaction cannot be reversed once completed.
-              </p>
+          {/* Transfer Details */}
+          <div className="bg-gray-50 rounded-xl p-4 space-y-3 border border-gray-100">
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-500">Mobile Number</span>
+              <span className="font-mono font-medium text-gray-900">{mobile}</span>
+            </div>
+            <div className="h-px bg-gray-200 w-full"></div>
+            
+            {/* Recipient Gets */}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-gray-500">Recipient Gets</span>
+              <span className="font-bold text-gray-900 text-lg">
+                {amount} {product.currency}
+              </span>
+            </div>
+
+            {/* You Pay */}
+            <div className="flex justify-between items-center bg-indigo-50 p-3 rounded-lg -mx-1">
+              <span className="text-sm text-indigo-700 font-medium">You Pay</span>
+              <span className="font-bold text-indigo-700 text-lg">
+                ${totalCost.toFixed(2)} USD
+              </span>
             </div>
           </div>
-        </div>
 
-        {/* Actions */}
-        <div className="p-6 pt-0 space-y-3">
-          <button
-            onClick={onConfirm}
-            className="w-full bg-gradient-to-r from-indigo-600 to-blue-600 text-white py-4 rounded-lg font-bold hover:from-indigo-700 hover:to-blue-700 active:scale-[0.99] transition-all shadow-lg hover:shadow-xl min-h-[52px]"
-          >
-            Confirm & Proceed to Payment
-          </button>
-          <button
-            onClick={onClose}
-            className="w-full bg-gray-100 text-gray-700 py-4 rounded-lg font-semibold hover:bg-gray-200 active:scale-[0.99] transition-colors min-h-[52px]"
-          >
-            Cancel
-          </button>
+          <div className="flex items-start gap-2 text-xs text-gray-500 bg-gray-50 p-3 rounded-lg">
+            <ShieldCheck className="w-4 h-4 text-green-600 mt-0.5" />
+            <p>Please verify the mobile number. Top-ups are instant and cannot be reversed once sent.</p>
+          </div>
+
+          {/* Actions */}
+          <div className="grid grid-cols-2 gap-3">
+            <button 
+              onClick={onClose}
+              className="py-3 px-4 rounded-xl border border-gray-300 font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={onConfirm}
+              className="py-3 px-4 rounded-xl bg-indigo-600 font-bold text-white hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200 flex items-center justify-center gap-2"
+            >
+              Confirm <ArrowRight className="w-4 h-4" />
+            </button>
+          </div>
+
         </div>
       </div>
     </div>
   );
-};
-
-export default ConfirmationModal;
+}

@@ -14,44 +14,59 @@ import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
 import ConfirmationModal from './ConfirmationModal';
 
-// ✅ FIX: Match the Env Var name used in Server
+// ✅ FIX: Use Env Variable for Margin (Same as Server)
+// Note: Ensure VITE_DTONE_FALLBACK_MARGIN is set in your .env file
+const MARGIN = Number(import.meta.env.VITE_DTONE_FALLBACK_MARGIN) || 1.15;
 const MIN_USD_AMOUNT = Number(import.meta.env.VITE_MIN_USD_ORDER) || 5;
 
 // ==================================================================
-// ✅ HELPER FUNCTIONS
+// HELPER FUNCTIONS
 // ==================================================================
+
+// ✅ Helper to get the REAL price the user pays (Cost * Margin)
+const calculateDisplayPrice = (product: Product, customAmount?: number): number => {
+  // 1. Determine Base Cost in USD
+  let baseCost = 0;
+  
+  if (customAmount) {
+    // Ranged: Calculate proportional cost
+    // Formula: (Cost / Min) * Amount
+    if (product.costPrice && product.min) {
+      baseCost = (product.costPrice / product.min) * customAmount;
+    } else {
+      // Fallback: Assume 1:1 if no cost data (unlikely for ranged)
+      baseCost = customAmount; 
+    }
+  } else {
+    // Fixed: Use costPrice (preferred) or amount
+    // Parse amount string "100 HTG" -> 100
+    const faceValue = parseFloat(product.amount.split(' ')[0]);
+    baseCost = product.costPrice || faceValue;
+  }
+
+  // 2. Apply Margin
+  return baseCost * MARGIN;
+};
 
 const isFixedProductEligible = (p: Product): boolean => {
   if (p.costPrice === undefined || p.costPrice === null) return true;
-  return p.costPrice >= MIN_USD_AMOUNT;
+  return (p.costPrice * MARGIN) >= MIN_USD_AMOUNT;
 };
 
 const isRangedProductEligible = (p: Product): boolean => {
   if (!p.costPrice || !p.min || !p.max) return true;
-  const costRatio = p.costPrice / p.min;
-  const maxPotentialCost = p.max * costRatio;
-  return maxPotentialCost >= MIN_USD_AMOUNT;
-};
-
-const calculateUsdCost = (localAmount: number, product: Product): number | null => {
-  if (!product.min || product.min === 0) return null;
-  if (!product.costPrice) return null;
-  const costRatio = product.costPrice / product.min;
-  return localAmount * costRatio;
-};
-
-const getMinLocalAmount = (product: Product): number | null => {
-  if (!product.min || product.min === 0) return null;
-  if (!product.costPrice) return null;
-  const costRatio = product.costPrice / product.min;
-  if (costRatio === 0) return null;
-  return Math.ceil(MIN_USD_AMOUNT / costRatio);
+  const maxPrice = (p.max * (p.costPrice / p.min)) * MARGIN;
+  return maxPrice >= MIN_USD_AMOUNT;
 };
 
 const getEffectiveMin = (product: Product): number => {
-  const localMinReq = getMinLocalAmount(product);
-  if (!localMinReq) return product.min;
-  return Math.max(product.min, localMinReq);
+  if (!product.min || !product.costPrice) return product.min;
+  
+  // Calculate Min Local Amount to reach $5 USD (with margin)
+  const costPerUnit = product.costPrice / product.min;
+  const minRequired = MIN_USD_AMOUNT / (costPerUnit * MARGIN);
+  
+  return Math.max(product.min, Math.ceil(minRequired));
 };
 
 const validateCustomAmount = (value: string, product: Product): string | null => {
@@ -61,7 +76,7 @@ const validateCustomAmount = (value: string, product: Product): string | null =>
   const effectiveMin = getEffectiveMin(product);
 
   if (amount < effectiveMin) {
-    return `Minimum amount is ${effectiveMin} ${product.currency} ($${MIN_USD_AMOUNT} USD)`;
+    return `Minimum amount is ${effectiveMin} ${product.currency}`;
   }
   if (amount > product.max) {
     return `Maximum amount is ${product.max} ${product.currency}`;
@@ -95,7 +110,15 @@ export default function RechargeFlow() {
   
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
-  const [pendingTxn, setPendingTxn] = useState<{product: Product, amount: number, mobile: string} | null>(null);
+  
+  // Track both Face Value (amount) and User Cost (totalCost)
+  const [pendingTxn, setPendingTxn] = useState<{
+    product: Product, 
+    amount: number, 
+    totalCost: number, 
+    mobile: string
+  } | null>(null);
+  
   const [isProcessingTransaction, setIsProcessingTransaction] = useState(false);
 
   const [currency, setCurrency] = useState(''); 
@@ -129,32 +152,25 @@ export default function RechargeFlow() {
     }
   }, [availableCurrencies, currency]);
 
-  // ✅ UPDATED: Ranged products are NO LONGER filtered by currency
   const { fixedProducts, rangedProducts } = useMemo(() => {
-    // 1. Separate raw lists first
     const rawFixed = allProducts.filter(p => !p.type?.includes('RANGED'));
     const rawRanged = allProducts.filter(p => p.type?.includes('RANGED'));
 
-    // 2. Apply currency filter ONLY to Fixed products
-    // (This ensures "Custom Amount" is always visible regardless of currency filter)
     let fixed = rawFixed;
     if (currency) {
       fixed = fixed.filter(p => p.currency === currency);
     }
     
-    // 3. Ranged products are always included
     const ranged = rawRanged;
-    
-    // Apply eligibility filters
     const eligibleFixed = fixed.filter(isFixedProductEligible);
     const eligibleRanged = ranged.filter(isRangedProductEligible);
     
-    // Apply price filter to fixed products
     let filteredFixed = eligibleFixed;
     if (priceFilter !== 'ALL') {
       filteredFixed = eligibleFixed.filter(p => {
-        const price = parseFloat(p.amount.split(' ')[0]);
-        return Math.abs(price - priceFilter) <= 1.5; 
+        // Filter based on USD Cost, not face value
+        const price = calculateDisplayPrice(p);
+        return Math.abs(price - priceFilter) <= 2.5; // Wider tolerance
       });
     }
     
@@ -229,6 +245,7 @@ export default function RechargeFlow() {
     const amount = parseFloat(customAmount);
     if (isNaN(amount)) return;
     
+    // Create a temporary product for logic flow
     const customProduct: Product = {
       ...selectedRangedProduct,
       amount: `${amount} ${selectedRangedProduct.currency}`
@@ -309,16 +326,24 @@ export default function RechargeFlow() {
   };
 
   const handlePurchase = async (product: Product, customAmountValue?: number) => {
-    const priceString = product.amount.split(' ')[0]; 
-    const finalAmount = customAmountValue || parseFloat(priceString);
-
+    const faceValue = customAmountValue || parseFloat(product.amount.split(' ')[0]);
     const effectiveMin = getEffectiveMin(product);
-    if (finalAmount < effectiveMin) {
+    
+    if (faceValue < effectiveMin) {
         setApiError(`Minimum purchase is ${effectiveMin} ${product.currency}`);
         return;
     }
 
-    setPendingTxn({ product, amount: finalAmount, mobile: validationState?.fullNumber || ''  });
+    // Calculate final USD Cost with Margin
+    const totalCost = calculateDisplayPrice(product, customAmountValue);
+
+    setPendingTxn({ 
+      product, 
+      amount: faceValue, // What they get (e.g., 500 HTG)
+      totalCost: totalCost, // What they pay (e.g., $6.50 USD)
+      mobile: validationState?.fullNumber || ''  
+    });
+    
     setIsConfirmModalOpen(true);
   };
 
@@ -689,7 +714,6 @@ export default function RechargeFlow() {
                 {activeTab === 'AIRTIME' && (
                   <div className="space-y-4">
                     
-                    {/* ✅ MOVED TO TOP: Custom Amount Section */}
                     {rangedProducts.length > 0 && (
                       <div className="border-b pb-4 mb-4">
                         <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
@@ -717,7 +741,6 @@ export default function RechargeFlow() {
                           </button>
                         ) : (
                           <div className="p-4 rounded-xl border-2 border-indigo-300 bg-indigo-50/50">
-                            {/* Range info */}
                             <div className="text-sm text-gray-600 mb-3">
                               Range: <span className="font-medium">{getEffectiveMin(selectedRangedProduct!)} - {selectedRangedProduct?.max} {selectedRangedProduct?.currency}</span>
                               {selectedRangedProduct && (
@@ -727,7 +750,6 @@ export default function RechargeFlow() {
                               )}
                             </div>
                             
-                            {/* Input */}
                             <div className="flex gap-3">
                               <div className="flex-1 relative">
                                 <input
@@ -746,7 +768,8 @@ export default function RechargeFlow() {
                                 />
                                 {customAmount && selectedRangedProduct && !customAmountError && (
                                   <div className="absolute right-3 top-1/2 -translate-y-1/2 text-sm text-green-600 font-medium">
-                                    ≈ ${calculateUsdCost(parseFloat(customAmount), selectedRangedProduct)?.toFixed(2)} USD
+                                    {/* Show Calculated USD Price */}
+                                    ≈ ${calculateDisplayPrice(selectedRangedProduct, parseFloat(customAmount)).toFixed(2)}
                                   </div>
                                 )}
                               </div>
@@ -762,12 +785,10 @@ export default function RechargeFlow() {
                               </button>
                             </div>
                             
-                            {/* Error message */}
                             {customAmountError && (
                               <p className="mt-2 text-sm text-red-600">{customAmountError}</p>
                             )}
                             
-                            {/* Cancel button */}
                             <button
                               onClick={() => {
                                 setShowCustomAmount(false);
@@ -798,11 +819,10 @@ export default function RechargeFlow() {
                             <span className="text-xs font-medium text-gray-400 uppercase tracking-wide group-hover:text-indigo-400">
                               {p.currency}
                             </span>
-                            {p.costPrice && (
-                              <span className="text-[10px] text-gray-400 mt-1">
-                                ≈ ${p.costPrice.toFixed(2)} USD
-                              </span>
-                            )}
+                            {/* Show USD Price on Card */}
+                            <span className="text-[11px] text-indigo-600 font-bold mt-1 bg-indigo-50 px-2 py-0.5 rounded-full">
+                              ${calculateDisplayPrice(p).toFixed(2)}
+                            </span>
                           </button>
                         ))}
                       </div>
@@ -818,7 +838,6 @@ export default function RechargeFlow() {
                       </div>
                     )}
 
-                    {/* No products at all */}
                     {categorizedProducts.AIRTIME.length === 0 && rangedProducts.length === 0 && (
                       <div className="text-center py-10">
                         <Smartphone className="w-12 h-12 mx-auto mb-3 text-gray-300" />
@@ -875,11 +894,10 @@ export default function RechargeFlow() {
                               <div className="bg-gray-100 text-gray-600 px-2 py-1 rounded text-xs font-bold whitespace-nowrap group-hover:bg-indigo-100 group-hover:text-indigo-700">
                                 {p.amount}
                               </div>
-                              {p.costPrice && (
-                                <div className="text-[10px] text-gray-400 mt-1">
-                                  ≈ ${p.costPrice.toFixed(2)} USD
-                                </div>
-                              )}
+                              {/* Show USD Price on List */}
+                              <div className="text-[11px] text-indigo-600 font-bold mt-1">
+                                ${calculateDisplayPrice(p).toFixed(2)}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -921,6 +939,8 @@ export default function RechargeFlow() {
               product={pendingTxn.product}
               mobile={pendingTxn.mobile}
               operatorName={operator?.operatorName || ''}
+              amount={pendingTxn.amount}      // Face Value
+              totalCost={pendingTxn.totalCost} // You Pay (with Margin)
             />
           )}
 
@@ -928,7 +948,7 @@ export default function RechargeFlow() {
              <PaymentModal
                isOpen={isPayModalOpen}
                onClose={handleCloseModal} 
-               amount={pendingTxn.amount > 0 ? pendingTxn.amount : parseFloat(pendingTxn.product.amount.split(' ')[0] || '0')}
+               amount={pendingTxn.amount} // Face Value (Server calculates Cost again securely)
                currency={pendingTxn.product.currency}
                onSuccess={executeTransaction} 
                mobile={pendingTxn.mobile}
