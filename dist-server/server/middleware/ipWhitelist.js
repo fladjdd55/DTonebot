@@ -17,9 +17,5 @@ function dtoneIpWhitelist(req, res, next) {
         console.error("[Security] Blocked webhook from ".concat(clientIp));
         return res.status(403).send('Forbidden'); // Don't reveal why
     }
-    if (!DTONE_ALLOWED_IPS.includes(clientIp)) {
-        console.warn("[Security] \uD83D\uDEAB Blocked DTOne callback from unauthorized IP: ".concat(clientIp));
-        return res.status(403).send('Forbidden');
-    }
     next();
 }

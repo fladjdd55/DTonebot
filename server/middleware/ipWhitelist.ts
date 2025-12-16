@@ -19,10 +19,5 @@ export function dtoneIpWhitelist(req: Request, res: Response, next: NextFunction
   return res.status(403).send('Forbidden'); // Don't reveal why
   }
 
-  if (!DTONE_ALLOWED_IPS.includes(clientIp)) {
-    console.warn(`[Security] 🚫 Blocked DTOne callback from unauthorized IP: ${clientIp}`);
-    return res.status(403).send('Forbidden');
-  }
-
   next();
 }

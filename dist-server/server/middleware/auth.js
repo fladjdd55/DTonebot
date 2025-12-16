@@ -44,7 +44,13 @@ exports.requireAuth = requireAuth;
 exports.optionalAuth = optionalAuth;
 var jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 var db_1 = require("../db");
-var JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-key-change-in-production';
+// ✅ SECURITY: Fail fast if JWT_SECRET is missing
+var JWT_SECRET = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+    throw new Error('FATAL: JWT_SECRET must be set in environment variables');
+}
+// ✅ TypeScript now knows JWT_SECRET is definitely a string
+var SECRET = JWT_SECRET;
 function requireAuth(req, res, next) {
     return __awaiter(this, void 0, void 0, function () {
         var authHeader, cookieToken, token, decoded, user, error_1;
@@ -55,11 +61,11 @@ function requireAuth(req, res, next) {
                     _b.trys.push([0, 2, , 3]);
                     authHeader = req.headers.authorization;
                     cookieToken = (_a = req.cookies) === null || _a === void 0 ? void 0 : _a.auth_token;
-                    token = cookieToken || (authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
+                    token = cookieToken || ((authHeader === null || authHeader === void 0 ? void 0 : authHeader.startsWith('Bearer ')) ? authHeader.split(' ')[1] : null);
                     if (!token) {
                         return [2 /*return*/, res.status(401).json({ error: 'Authentication required' })];
                     }
-                    decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+                    decoded = jsonwebtoken_1.default.verify(token, SECRET);
                     return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.id } })];
                 case 1:
                     user = _b.sent();
@@ -76,6 +82,12 @@ function requireAuth(req, res, next) {
                     return [3 /*break*/, 3];
                 case 2:
                     error_1 = _b.sent();
+                    if (error_1.name === 'TokenExpiredError') {
+                        return [2 /*return*/, res.status(401).json({ error: 'Token expired' })];
+                    }
+                    if (error_1.name === 'JsonWebTokenError') {
+                        return [2 /*return*/, res.status(401).json({ error: 'Invalid token' })];
+                    }
                     return [2 /*return*/, res.status(401).json({ error: 'Authentication failed' })];
                 case 3: return [2 /*return*/];
             }
@@ -92,9 +104,9 @@ function optionalAuth(req, res, next) {
                     _b.trys.push([0, 3, , 4]);
                     authHeader = req.headers.authorization;
                     cookieToken = (_a = req.cookies) === null || _a === void 0 ? void 0 : _a.auth_token;
-                    token = cookieToken || (authHeader && authHeader.startsWith('Bearer ') ? authHeader.split(' ')[1] : null);
+                    token = cookieToken || ((authHeader === null || authHeader === void 0 ? void 0 : authHeader.startsWith('Bearer ')) ? authHeader.split(' ')[1] : null);
                     if (!token) return [3 /*break*/, 2];
-                    decoded = jsonwebtoken_1.default.verify(token, JWT_SECRET);
+                    decoded = jsonwebtoken_1.default.verify(token, SECRET);
                     return [4 /*yield*/, db_1.db.user.findUnique({ where: { id: decoded.id } })];
                 case 1:
                     user = _b.sent();
@@ -112,6 +124,7 @@ function optionalAuth(req, res, next) {
                     return [3 /*break*/, 4];
                 case 3:
                     error_2 = _b.sent();
+                    // Token invalid/expired - continue as guest
                     next();
                     return [3 /*break*/, 4];
                 case 4: return [2 /*return*/];
