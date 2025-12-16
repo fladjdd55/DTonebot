@@ -24,7 +24,7 @@ export default function TransactionHistory({ isOpen, onClose }: Props) {
         // Only pass pageNum
         const result = await authApi.getTransactions(pageNum);
         setTransactions(result.transactions);
-        setTotalPages(result.pagination.pages);
+        setTotalPages(result.pages);
       } catch (err) {
         setError('Failed to load transactions');
       } finally {
