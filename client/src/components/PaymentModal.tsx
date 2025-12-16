@@ -1,76 +1,201 @@
 // client/src/components/PaymentModal.tsx
-// ============================================================
-// PRODUCTION-READY PAYMENT MODAL
-// Features:
-// - Secure auth token handling
-// - Server-side price display (what user actually pays)
-// - Idempotency keys to prevent duplicate charges
-// - Memory leak prevention
-// - Retry mechanism on failures
-// - Proper loading & error states
-// - Mobile-friendly design
-// ============================================================
 
-import { useEffect, useState, useMemo, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { 
   X, 
   ShieldCheck, 
   CreditCard, 
   AlertCircle, 
   RefreshCw,
-  CheckCircle,
+//  CheckCircle,
   Loader2,
   Lock
 } from 'lucide-react';
-import { useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
+import { loadStripe } from '@stripe/stripe-js';
+import { Elements, useStripe, useElements, PaymentElement } from '@stripe/react-stripe-js';
 import { getAccessToken } from '../services/api';
+
+// ✅ Initialize Stripe outside component
+const STRIPE_KEY = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY || '';
+const stripePromise = loadStripe(STRIPE_KEY);
+
+if (!STRIPE_KEY) console.error("⚠️ Stripe Key missing in .env");
 
 // ============================================================
 // TYPES
 // ============================================================
 
+// Props for the main Modal (Parent)
 interface PaymentModalProps {
   isOpen: boolean;
   onClose: () => void;
-  
-  // Payment Details
-  amount: number;           // Local currency amount (e.g., 500 HTG)
-  currency: string;         // Local currency code (e.g., 'HTG')
-  mobile: string;           // Recipient phone number
-  productId: number;        // Product ID from database
-  productType?: string;     // FIXED or RANGED
-  
-  // Optional: Pre-fetched client secret (skip auto-fetch)
+  amount: number;
+  currency: string;
+  mobile: string;
+  productId: number;
+  productType?: string;
   clientSecret?: string;
-  
-  // Callbacks
   onSuccess?: (paymentId: string) => void;
   onError?: (error: string) => void;
-  
-  // External state (from parent for transaction processing)
   transactionError?: string;
   isProcessingTransaction?: boolean;
   onClearError?: () => void;
 }
 
+// Props for the Internal Form (Child) - ✅ NEW INTERFACE
+interface PaymentFormProps {
+  amount: number;
+  currency: string;
+  chargeAmountUsd: number | null;
+  onSuccess?: (paymentId: string) => void;
+  onError?: (error: string) => void;
+  transactionError?: string;
+  isProcessingTransaction?: boolean;
+  onClearError?: () => void;
+  onRetry: () => void;
+}
+
 interface PaymentIntentResponse {
   clientSecret: string;
   id: string;
-  chargeAmount: number;     // Actual USD amount to charge
+  chargeAmount: number;
   isGuest: boolean;
   error?: string;
 }
 
-type ModalState = 
-  | 'initializing'          // Fetching payment intent
-  | 'ready'                 // Payment form ready
-  | 'processing'            // Stripe confirming payment
-  | 'completing'            // Parent processing transaction
-  | 'success'               // Payment complete
-  | 'error';                // Fatal error (can retry)
+// ============================================================
+// INTERNAL FORM COMPONENT (Child)
+// ============================================================
+
+function PaymentForm({ 
+  amount, 
+  currency, 
+  chargeAmountUsd, 
+  onSuccess, 
+  onError, 
+  transactionError,
+  isProcessingTransaction,
+  onClearError,
+  onRetry
+}: PaymentFormProps) { // ✅ Use the interface here
+  
+  const stripe = useStripe();
+  const elements = useElements();
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  // Sync parent transaction error
+  useEffect(() => {
+    if (transactionError) {
+      setLocalError(transactionError);
+      setIsProcessing(false); 
+    }
+  }, [transactionError]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripe || !elements) return;
+
+    setIsProcessing(true);
+    setLocalError(null);
+    onClearError?.();
+
+    try {
+      // 1. Validate form
+      const { error: submitError } = await elements.submit();
+      if (submitError) {
+        setLocalError(submitError.message || 'Please check your details');
+        setIsProcessing(false);
+        return;
+      }
+
+      // 2. Confirm Payment
+      const { error, paymentIntent } = await stripe.confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${window.location.origin}/?payment_status=success`,
+        },
+        redirect: 'if_required'
+      });
+
+      if (error) {
+        setLocalError(error.message || 'Payment failed');
+        onError?.(error.message || 'Payment failed');
+        setIsProcessing(false);
+      } else if (paymentIntent && paymentIntent.status === 'succeeded') {
+        // 3. Handover to parent for backend processing
+        onSuccess?.(paymentIntent.id);
+      } else {
+        setLocalError(`Payment Status: ${paymentIntent?.status}`);
+        setIsProcessing(false);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setLocalError('An unexpected error occurred');
+      setIsProcessing(false);
+    }
+  };
+
+  const displayAmount = chargeAmountUsd ?? amount;
+  const isLoading = isProcessing || isProcessingTransaction;
+
+  return (
+    <form onSubmit={handleSubmit}>
+      <div className="text-center mb-6">
+        <p className="text-sm text-gray-500 mb-1">Total Amount</p>
+        <p className="text-3xl font-bold text-gray-900">
+          ${displayAmount.toFixed(2)} <span className="text-lg text-gray-500">USD</span>
+        </p>
+        {currency !== 'USD' && chargeAmountUsd && (
+          <p className="text-sm text-gray-500 mt-1">≈ {amount.toLocaleString()} {currency}</p>
+        )}
+      </div>
+
+      <div className="mb-6">
+        <PaymentElement />
+      </div>
+
+      {localError && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl flex items-start gap-2">
+          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+          <span>{localError}</span>
+        </div>
+      )}
+
+      {/* Action Buttons */}
+      {transactionError ? (
+        <button
+          type="button"
+          onClick={onRetry} 
+          className="w-full py-3 bg-gray-900 text-white font-bold rounded-xl hover:bg-black flex items-center justify-center gap-2"
+        >
+          <RefreshCw className="w-4 h-4" /> Try Again
+        </button>
+      ) : (
+        <button
+          type="submit"
+          disabled={!stripe || isLoading}
+          className="w-full py-4 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-bold rounded-xl hover:from-indigo-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-lg active:scale-[0.99]"
+        >
+          {isLoading ? (
+            <>
+              <Loader2 className="w-5 h-5 animate-spin" />
+              {isProcessingTransaction ? 'Finalizing...' : 'Processing...'}
+            </>
+          ) : (
+            <>
+              Pay ${displayAmount.toFixed(2)}
+              <ShieldCheck className="w-5 h-5 opacity-80" />
+            </>
+          )}
+        </button>
+      )}
+    </form>
+  );
+}
 
 // ============================================================
-// COMPONENT
+// PARENT MODAL (Manages Fetching & Providers)
 // ============================================================
 
 export default function PaymentModal({ 
@@ -79,114 +204,61 @@ export default function PaymentModal({
   clientSecret: propClientSecret, 
   amount, 
   currency, 
-  mobile,
-  productId,
-  productType,
-  onSuccess,
-  onError,
-  transactionError,
-  isProcessingTransaction,
-  onClearError
+  mobile, 
+  productId, 
+  productType, 
+  onSuccess, 
+  onError, 
+  transactionError, 
+  isProcessingTransaction, 
+  onClearError 
 }: PaymentModalProps) {
-  
-  // Stripe hooks
-  const stripe = useStripe();
-  const elements = useElements();
-  
-  // Component state
-  const [modalState, setModalState] = useState<ModalState>('initializing');
+
   const [fetchedClientSecret, setFetchedClientSecret] = useState<string | null>(null);
   const [chargeAmountUsd, setChargeAmountUsd] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [initError, setInitError] = useState<string | null>(null);
   
-  // Refs for cleanup and preventing duplicate calls
   const isMountedRef = useRef(true);
   const fetchAttemptRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
-  
-  // Active client secret (prop or fetched)
-  const activeClientSecret = propClientSecret || fetchedClientSecret;
-  
-  // Generate stable idempotency key per payment attempt
-  const idempotencyKey = useMemo(() => {
-    return `pi_${productId}_${amount}_${currency}_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  }, [productId, amount, currency]);
 
-  // ============================================================
-  // RESET STATE ON OPEN/CLOSE
-  // ============================================================
-  
+  const activeClientSecret = propClientSecret || fetchedClientSecret;
+
+  // Cleanup on mount/unmount/close
   useEffect(() => {
     if (isOpen) {
-      // Reset for fresh start
       isMountedRef.current = true;
-      setModalState('initializing');
-      setError(null);
-      fetchAttemptRef.current = 0;
-      
-      if (propClientSecret) {
-        setModalState('ready');
-      }
+      setInitError(null);
     } else {
-      // Cleanup on close
       isMountedRef.current = false;
       setFetchedClientSecret(null);
       setChargeAmountUsd(null);
-      setError(null);
-      onClearError?.();
+      setInitError(null);
+      onClearError?.(); // Removed from dependencies below to fix loop
       
-      // Abort any in-flight requests
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
-        abortControllerRef.current = null;
       }
     }
-    
-    return () => {
-      isMountedRef.current = false;
-    };
+    return () => { isMountedRef.current = false; };
   }, [isOpen, propClientSecret]); 
 
-  // ============================================================
-  // SYNC EXTERNAL TRANSACTION STATE
-  // ============================================================
-  
-  useEffect(() => {
-    if (isProcessingTransaction) {
-      setModalState('completing');
-    }
-  }, [isProcessingTransaction]);
-  
-  useEffect(() => {
-    if (transactionError && modalState === 'completing') {
-      setModalState('error');
-      setError(transactionError);
-    }
-  }, [transactionError, modalState]);
-
-  // ============================================================
-  // FETCH PAYMENT INTENT (WITH RETRY LOGIC)
-  // ============================================================
-  
+  // Fetch Intent Logic
   const fetchPaymentIntent = useCallback(async () => {
     if (!isOpen || propClientSecret || !amount || !productId) return;
-    
-    // Prevent duplicate fetches
+
     fetchAttemptRef.current += 1;
     const currentAttempt = fetchAttemptRef.current;
-    
-    // Cancel previous request if exists
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
+
+    if (abortControllerRef.current) abortControllerRef.current.abort();
     abortControllerRef.current = new AbortController();
-    
-    setModalState('initializing');
-    setError(null);
-    
+
+    setInitError(null);
+
     try {
       const token = getAccessToken();
-      
+      const idempotencyKey = `pi_${productId}_${amount}_${currency}_${Date.now()}`;
+
       const response = await fetch('/api/create-payment-intent', {
         method: 'POST',
         headers: { 
@@ -198,340 +270,113 @@ export default function PaymentModal({
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
           customAmount: amount,
-          currency: currency,
-          productId: productId,
+          currency,
+          productId,
           type: productType,
-          mobile: mobile
+          mobile
         })
       });
-      
-      // Check if component still mounted and same attempt
+
       if (!isMountedRef.current || currentAttempt !== fetchAttemptRef.current) return;
-      
+
       const data: PaymentIntentResponse = await response.json();
-      
+
       if (!response.ok || data.error) {
         throw new Error(data.error || `Server error: ${response.status}`);
       }
-      
-      if (!data.clientSecret) {
-        throw new Error('No client secret returned');
-      }
-      
-      // Success - update state
+
       setFetchedClientSecret(data.clientSecret);
       setChargeAmountUsd(data.chargeAmount);
-      setModalState('ready');
-      
-    } catch (err: any) {
-      // Ignore abort errors
-      if (err.name === 'AbortError') return;
-      
-      // Check if still mounted
-      if (!isMountedRef.current) return;
-      
-      console.error('[PaymentModal] Init failed:', err);
-      setError(err.message || 'Failed to initialize payment. Please try again.');
-      setModalState('error');
-      onError?.(err.message);
-    }
-  }, [isOpen, propClientSecret, amount, currency, productId, productType, mobile, idempotencyKey, onError]);
 
-  // Auto-fetch on mount
+    } catch (err: any) {
+      if (err.name === 'AbortError') return;
+      if (isMountedRef.current) {
+        console.error('[PaymentModal] Init Error:', err);
+        setInitError(err.message || 'Failed to initialize payment');
+      }
+    }
+  }, [isOpen, propClientSecret, amount, currency, productId, productType, mobile]);
+
+  // Trigger fetch when ready
   useEffect(() => {
-    if (isOpen && !propClientSecret && !fetchedClientSecret && modalState === 'initializing') {
+    if (isOpen && !propClientSecret && !fetchedClientSecret && !initError) {
       fetchPaymentIntent();
     }
-  }, [isOpen, propClientSecret, fetchedClientSecret, modalState, fetchPaymentIntent]);
+  }, [isOpen, propClientSecret, fetchedClientSecret, initError, fetchPaymentIntent]);
 
-  // ============================================================
-  // HANDLE PAYMENT SUBMISSION
-  // ============================================================
-  
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!stripe || !elements || !activeClientSecret) {
-      setError('Payment system not ready. Please wait.');
-      return;
-    }
-    
-    setModalState('processing');
-    setError(null);
-    onClearError?.();
-    
-    try {
-      const { error: submitError, paymentIntent } = await stripe.confirmPayment({
-        elements,
-        confirmParams: {
-          return_url: `${window.location.origin}/?payment_status=success`,
-        },
-        redirect: 'if_required'
-      });
-      
-      if (!isMountedRef.current) return;
-      
-      if (submitError) {
-        // User-facing Stripe errors
-        const errorMessage = submitError.message || 'Payment failed. Please try again.';
-        setError(errorMessage);
-        setModalState('ready'); // Allow retry
-        onError?.(errorMessage);
-        return;
-      }
-      
-      if (paymentIntent && paymentIntent.status === 'succeeded') {
-        // Payment confirmed - notify parent to complete transaction
-        if (onSuccess) {
-          setModalState('completing');
-          onSuccess(paymentIntent.id);
-        } else {
-          // No handler - just close and refresh
-          setModalState('success');
-          setTimeout(() => {
-            onClose();
-            window.location.reload();
-          }, 1500);
-        }
-      } else if (paymentIntent && paymentIntent.status === 'processing') {
-        // Payment is processing (async)
-        setModalState('completing');
-        if (onSuccess) {
-          onSuccess(paymentIntent.id);
-        }
-      } else {
-        // Unexpected state
-        setError('Payment status unclear. Please check your account.');
-        setModalState('error');
-      }
-      
-    } catch (err: any) {
-      if (!isMountedRef.current) return;
-      
-      console.error('[PaymentModal] Payment error:', err);
-      setError(err.message || 'An unexpected error occurred');
-      setModalState('error');
-      onError?.(err.message);
-    }
-  };
-
-  // ============================================================
-  // HANDLE RETRY
-  // ============================================================
-  
   const handleRetry = () => {
-    setError(null);
     setFetchedClientSecret(null);
     setChargeAmountUsd(null);
+    setInitError(null);
     onClearError?.();
-    fetchPaymentIntent();
   };
 
-  // ============================================================
-  // HANDLE CLOSE (WITH CONFIRMATION)
-  // ============================================================
-  
-  const handleClose = () => {
-    if (modalState === 'processing' || modalState === 'completing') {
-      // Don't allow closing during payment
-      return;
-    }
-    onClose();
-  };
-
-  // ============================================================
-  // RENDER HELPERS
-  // ============================================================
-  
-  const renderPriceDisplay = () => {
-    const displayAmount = chargeAmountUsd ?? amount;
-    
-    return (
-      <div className="text-center mb-6">
-        <p className="text-sm text-gray-500 mb-1">Total Amount</p>
-        <p className="text-3xl font-bold text-gray-900">
-          ${displayAmount.toFixed(2)} <span className="text-lg text-gray-500">USD</span>
-        </p>
-        
-        {/* Show local currency equivalent if different */}
-        {currency !== 'USD' && chargeAmountUsd && (
-          <p className="text-sm text-gray-500 mt-1">
-            ≈ {amount.toLocaleString()} {currency}
-          </p>
-        )}
-        
-        {/* Recipient info */}
-        <p className="text-xs text-gray-400 mt-2">
-          Recharge for: <span className="font-mono">{mobile}</span>
-        </p>
-      </div>
-    );
-  };
-
-  // ============================================================
-  // RENDER - DON'T SHOW IF NOT OPEN
-  // ============================================================
-  
   if (!isOpen) return null;
 
-  // ============================================================
-  // RENDER - MAIN MODAL
-  // ============================================================
-  
   return (
     <div 
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200"
-      onClick={(e) => e.target === e.currentTarget && handleClose()}
+      onClick={(e) => e.target === e.currentTarget && onClose()}
     >
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden animate-in zoom-in-95 duration-200">
         
-        {/* ========== HEADER ========== */}
+        {/* Header */}
         <div className="bg-gradient-to-r from-indigo-600 to-blue-600 p-4 flex justify-between items-center">
           <h3 className="font-bold text-white flex items-center gap-2">
-            <CreditCard className="w-5 h-5" />
-            Secure Payment
+            <CreditCard className="w-5 h-5" /> Secure Payment
           </h3>
           <button 
-            onClick={handleClose}
-            disabled={modalState === 'processing' || modalState === 'completing'}
-            className="p-1 text-white/80 hover:text-white hover:bg-white/10 rounded-full transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={onClose} 
+            disabled={isProcessingTransaction}
+            className="p-1 text-white/80 hover:text-white hover:bg-white/10 rounded-full disabled:opacity-50"
           >
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* ========== CONTENT ========== */}
-        <div className="p-6">
+        {/* Content */}
+        <div className="p-6 min-h-[300px] flex flex-col justify-center">
           
-          {/* ---------- ERROR BANNER ---------- */}
-          {(error || transactionError) && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-xl flex items-start gap-2">
-              <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <p className="font-medium">Payment Error</p>
-                <p className="text-red-600">{error || transactionError}</p>
-              </div>
-            </div>
-          )}
-
-          {/* ---------- STATE: INITIALIZING ---------- */}
-          {modalState === 'initializing' && (
-            <div className="py-12 text-center">
-              <div className="relative mx-auto w-16 h-16 mb-4">
-                <div className="absolute inset-0 border-4 border-indigo-200 rounded-full"></div>
-                <div className="absolute inset-0 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-                <Lock className="absolute inset-0 m-auto w-6 h-6 text-indigo-600" />
-              </div>
-              <p className="text-gray-700 font-medium">Initializing Secure Checkout</p>
-              <p className="text-sm text-gray-500 mt-1">Setting up encrypted payment...</p>
-            </div>
-          )}
-
-          {/* ---------- STATE: ERROR (WITH RETRY) ---------- */}
-          {modalState === 'error' && !activeClientSecret && (
-            <div className="py-8 text-center">
+          {initError ? (
+            <div className="text-center py-4">
               <div className="w-16 h-16 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <AlertCircle className="w-8 h-8 text-red-500" />
               </div>
               <p className="text-gray-900 font-bold mb-2">Unable to Start Payment</p>
-              <p className="text-sm text-gray-600 mb-6 max-w-xs mx-auto">
-                {error || 'Something went wrong. Please try again.'}
-              </p>
-              <div className="flex gap-3 justify-center">
-                <button
-                  onClick={handleClose}
-                  className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleRetry}
-                  className="px-6 py-2 bg-indigo-600 text-white rounded-xl font-medium hover:bg-indigo-700 flex items-center gap-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Try Again
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* ---------- STATE: COMPLETING (TRANSACTION PROCESSING) ---------- */}
-          {modalState === 'completing' && (
-            <div className="py-12 text-center">
-              <div className="relative mx-auto w-16 h-16 mb-4">
-                <div className="absolute inset-0 border-4 border-green-200 rounded-full"></div>
-                <div className="absolute inset-0 border-4 border-green-600 border-t-transparent rounded-full animate-spin"></div>
-                <CheckCircle className="absolute inset-0 m-auto w-6 h-6 text-green-600" />
-              </div>
-              <p className="text-gray-900 font-bold">Payment Received!</p>
-              <p className="text-gray-600 mt-1">Completing your transaction...</p>
-              <p className="text-xs text-gray-400 mt-4">Please don't close this window</p>
-            </div>
-          )}
-
-          {/* ---------- STATE: SUCCESS ---------- */}
-          {modalState === 'success' && (
-            <div className="py-12 text-center">
-              <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-                <CheckCircle className="w-8 h-8 text-green-600" />
-              </div>
-              <p className="text-gray-900 font-bold text-xl">Payment Successful!</p>
-              <p className="text-gray-600 mt-1">Redirecting...</p>
-            </div>
-          )}
-
-          {/* ---------- STATE: READY (PAYMENT FORM) ---------- */}
-          {(modalState === 'ready' || (modalState === 'processing') || (modalState === 'error' && activeClientSecret)) && activeClientSecret && (
-            <form onSubmit={handleSubmit}>
-              
-              {/* Price Display */}
-              {renderPriceDisplay()}
-              
-              {/* Stripe Payment Element */}
-              <div className="mb-6">
-                <PaymentElement 
-                  options={{
-                    layout: 'tabs',
-                    paymentMethodOrder: ['card', 'apple_pay', 'google_pay']
-                  }}
-                />
-              </div>
-              
-              {/* Submit Button */}
-              <button
-                type="submit"
-                disabled={!stripe || modalState === 'processing'}
-                className="w-full py-4 bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-bold rounded-xl hover:from-indigo-700 hover:to-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 transition-all shadow-lg hover:shadow-xl active:scale-[0.99]"
-              >
-                {modalState === 'processing' ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    Processing Payment...
-                  </>
-                ) : (
-                  <>
-                    Pay ${(chargeAmountUsd ?? amount).toFixed(2)} USD
-                    <ShieldCheck className="w-5 h-5 opacity-80" />
-                  </>
-                )}
+              <p className="text-sm text-gray-600 mb-6">{initError}</p>
+              <button onClick={handleRetry} className="px-6 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-2 mx-auto">
+                <RefreshCw className="w-4 h-4" /> Retry
               </button>
-              
-              {/* Retry button if error but form is showing */}
-              {modalState === 'error' && activeClientSecret && (
-                <button
-                  type="button"
-                  onClick={handleRetry}
-                  className="w-full mt-3 py-2 text-gray-600 hover:text-gray-800 font-medium flex items-center justify-center gap-2"
-                >
-                  <RefreshCw className="w-4 h-4" />
-                  Start Over
-                </button>
-              )}
-            </form>
+            </div>
+          ) : activeClientSecret ? (
+            <Elements 
+              stripe={stripePromise} 
+              options={{ 
+                clientSecret: activeClientSecret,
+                appearance: { theme: 'stripe' }
+              }}
+            >
+              <PaymentForm 
+                amount={amount}
+                currency={currency}
+                chargeAmountUsd={chargeAmountUsd}
+                onSuccess={onSuccess}
+                onError={onError}
+                transactionError={transactionError}
+                isProcessingTransaction={isProcessingTransaction}
+                onClearError={onClearError}
+                onRetry={handleRetry}
+              />
+            </Elements>
+          ) : (
+            <div className="text-center py-10">
+              <Loader2 className="w-10 h-10 text-indigo-600 animate-spin mx-auto mb-4" />
+              <p className="text-gray-600 font-medium">Initializing Secure Checkout...</p>
+            </div>
           )}
         </div>
 
-        {/* ========== FOOTER ========== */}
+        {/* Footer */}
         <div className="bg-gray-50 px-6 py-3 border-t">
           <div className="flex items-center justify-center gap-2 text-xs text-gray-400">
             <Lock className="w-3 h-3" />
@@ -544,4 +389,3 @@ export default function PaymentModal({
     </div>
   );
 }
-
