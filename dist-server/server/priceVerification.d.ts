@@ -8,13 +8,7 @@ export interface PriceVerificationResult {
 declare function getAdjustedMin(product: any): number;
 export declare const priceVerificationService: {
     getAdjustedMin: typeof getAdjustedMin;
-    /**
-     * Verify that the payment amount matches the product price
-     */
     verifyProductPrice(productId: number, paidAmount: number, paidCurrency: string): Promise<PriceVerificationResult>;
-    /**
-     * Get product price for payment intent creation
-     */
     getProductPrice(productId: number): Promise<{
         success: boolean;
         price?: number;

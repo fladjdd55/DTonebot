@@ -476,6 +476,7 @@ app.post('/api/auth/logout', function (req, res) { return __awaiter(void 0, void
             secure: process.env.NODE_ENV === 'production',
             sameSite: 'strict'
         });
+        res.json({ message: 'Logged out successfully' });
         return [2 /*return*/];
     });
 }); });
@@ -702,12 +703,12 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, function (req, res) 
 // 🔐 SECURE PURCHASE API (BLOCKS ATTACKS)
 // ==================================================================
 app.post('/api/purchase', auth_1.optionalAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, amount, unit, paymentId, type, paymentIntent, originalPayerId, currentUser, finalUserId, paidAmount, paidCurrency, priceCheck, e_2, result, error_7;
+    var _a, productId, mobile, amount, unit, paymentId, type, paymentIntent, originalPayerId, currentUser, finalUserId, existingTxn, paidAmount, paidCurrency, priceCheck, e_2, result, error_7;
     var _b, _c;
     return __generator(this, function (_d) {
         switch (_d.label) {
             case 0:
-                _d.trys.push([0, 9, , 10]);
+                _d.trys.push([0, 10, , 11]);
                 _a = purchaseSchema.parse(req.body), productId = _a.productId, mobile = _a.mobile, amount = _a.amount, unit = _a.unit, paymentId = _a.paymentId, type = _a.type;
                 return [4 /*yield*/, stripe.paymentIntents.retrieve(paymentId)];
             case 1:
@@ -722,26 +723,40 @@ app.post('/api/purchase', auth_1.optionalAuth, function (req, res) { return __aw
                     return [2 /*return*/, res.status(403).json({ error: 'Security Violation: Payment ownership mismatch.' })];
                 }
                 finalUserId = originalPayerId || undefined;
+                return [4 /*yield*/, db_1.db.transaction.findUnique({
+                        where: { paymentIntentId: paymentId }
+                    })];
+            case 2:
+                existingTxn = _d.sent();
+                if (existingTxn) {
+                    console.log("[API Purchase] \u23ED\uFE0F Transaction ".concat(paymentId, " already processed (Status: ").concat(existingTxn.status, "). Skipping price check."));
+                    if (existingTxn.status === 'COMPLETED') {
+                        return [2 /*return*/, res.json(__assign(__assign({ success: true }, existingTxn), { dbStatus: 'COMPLETED', alreadyProcessed: true }))];
+                    }
+                    if (existingTxn.status === 'REFUNDED' || existingTxn.status === 'FAILED') {
+                        return [2 /*return*/, res.json(__assign(__assign({ success: false }, existingTxn), { dbStatus: existingTxn.status, alreadyProcessed: true }))];
+                    }
+                }
                 paidAmount = paymentIntent.amount / 100;
                 paidCurrency = paymentIntent.currency.toUpperCase();
                 return [4 /*yield*/, priceVerification_1.priceVerificationService.verifyProductPrice(productId, paidAmount, paidCurrency)];
-            case 2:
-                priceCheck = _d.sent();
-                if (!(!priceCheck.valid && !['CACHE_MISS', 'NO_PRICE'].includes(priceCheck.code || ''))) return [3 /*break*/, 7];
-                console.error("[Security] \uD83D\uDEA8 BLOCKED: Price mismatch for ".concat(paymentId, ". Paid: ").concat(paidAmount, ", Expected: ").concat(priceCheck.expectedPrice));
-                _d.label = 3;
             case 3:
-                _d.trys.push([3, 5, , 6]);
-                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
+                priceCheck = _d.sent();
+                if (!(!priceCheck.valid && !['CACHE_MISS', 'NO_PRICE'].includes(priceCheck.code || ''))) return [3 /*break*/, 8];
+                console.error("[Security] \uD83D\uDEA8 BLOCKED: Price mismatch for ".concat(paymentId, ". Paid: ").concat(paidAmount, ", Expected: ").concat(priceCheck.expectedPrice));
+                _d.label = 4;
             case 4:
-                _d.sent();
-                return [3 /*break*/, 6];
+                _d.trys.push([4, 6, , 7]);
+                return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
             case 5:
+                _d.sent();
+                return [3 /*break*/, 7];
+            case 6:
                 e_2 = _d.sent();
                 console.error('Refund failed:', e_2);
-                return [3 /*break*/, 6];
-            case 6: return [2 /*return*/, res.status(403).json({ error: 'Price verification failed. Payment refunded.' })];
-            case 7: return [4 /*yield*/, processPurchase({
+                return [3 /*break*/, 7];
+            case 7: return [2 /*return*/, res.status(403).json({ error: 'Price verification failed. Payment refunded.' })];
+            case 8: return [4 /*yield*/, processPurchase({
                     paymentId: paymentId,
                     mobile: mobile,
                     productId: productId,
@@ -750,14 +765,14 @@ app.post('/api/purchase', auth_1.optionalAuth, function (req, res) { return __aw
                     type: type || 'UNKNOWN',
                     userId: finalUserId
                 }, 'API')];
-            case 8:
+            case 9:
                 result = _d.sent();
                 return [2 /*return*/, res.json(__assign(__assign({}, result), { isGuest: !finalUserId }))];
-            case 9:
+            case 10:
                 error_7 = _d.sent();
                 console.error("Purchase Error:", error_7);
                 return [2 /*return*/, res.status(500).json({ error: 'Internal server error' })];
-            case 10: return [2 /*return*/];
+            case 11: return [2 /*return*/];
         }
     });
 }); });

@@ -390,6 +390,7 @@ app.post('/api/auth/logout', async (req, res) => {
     secure: process.env.NODE_ENV === 'production',
     sameSite: 'strict'
   });
+  res.json({ message: 'Logged out successfully' });
 });
 
 app.get('/api/auth/me', requireAuth, async (req: Request, res: Response): Promise<any> => {
@@ -596,6 +597,32 @@ app.post('/api/purchase', optionalAuth, async (req: Request, res: Response): Pro
       return res.status(403).json({ error: 'Security Violation: Payment ownership mismatch.' });
     }
     const finalUserId = originalPayerId || undefined;
+
+    // ✅ RACE CONDITION FIX: Check DB before Price Verification
+    const existingTxn = await db.transaction.findUnique({
+      where: { paymentIntentId: paymentId }
+    });
+
+    if (existingTxn) {
+      console.log(`[API Purchase] ⏭️ Transaction ${paymentId} already processed (Status: ${existingTxn.status}). Skipping price check.`);
+      
+      if (existingTxn.status === 'COMPLETED') {
+        return res.json({ 
+          success: true, 
+          ...existingTxn, 
+          dbStatus: 'COMPLETED', 
+          alreadyProcessed: true 
+        });
+      }
+      if (existingTxn.status === 'REFUNDED' || existingTxn.status === 'FAILED') {
+        return res.json({ 
+          success: false, 
+          ...existingTxn, 
+          dbStatus: existingTxn.status, 
+          alreadyProcessed: true 
+        });
+      }
+    }
 
     // ✅ SECURITY: Block & Refund Price Mismatches
     const paidAmount = paymentIntent.amount / 100;

@@ -7,7 +7,6 @@ import {
   CreditCard, 
   AlertCircle, 
   RefreshCw,
-//  CheckCircle,
   Loader2,
   Lock
 } from 'lucide-react';

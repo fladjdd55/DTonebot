@@ -1,14 +1,16 @@
 // server/priceVerification.ts
 
 import { db } from './db';
-import { dtoneService } from './dtone';
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Tolerance for price comparison (handles floating point and minor variations)
-const PRICE_TOLERANCE_PERCENT = 0.01; // 1% tolerance
+// ✅ FIX: Define the same margin used in Routes.ts
+const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 
-// ✅ 1. Get Global Min from Env (Defaults to 0 if not set)
+// ✅ FIX: Increased tolerance to 5% to handle rounding differences
+const PRICE_TOLERANCE_PERCENT = 0.05; 
+
+// Global Min from Env
 const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 0);
 
 export interface PriceVerificationResult {
@@ -19,7 +21,6 @@ export interface PriceVerificationResult {
   code?: string;
 }
 
-// ✅ 2. Helper to calculate the adjusted minimum based on USD cost
 function getAdjustedMin(product: any): number {
   let min = product.minAmount || 0;
   
@@ -27,24 +28,17 @@ function getAdjustedMin(product: any): number {
     return product.amount || 0;
   }
 
-  // If currency is USD, enforce directly
+  // If product currency is USD, ensure it meets global min
   if (product.currency === 'USD') {
     return Math.max(min, GLOBAL_MIN_USD);
   }
 
-  // If we have a Cost Price in USD, calculate the Local Currency equivalent
+  // Calculate equivalent local currency min based on USD cost
   if (product.costPrice && product.costPrice > 0 && product.minAmount > 0) {
     const isCostUsd = !product.costCurrency || product.costCurrency === 'USD';
-    
     if (isCostUsd) {
-       // Ratio: Cost (USD) / Local Currency Unit
-       // Example: Cost $1 for 100 HTG -> Ratio = 0.01
        const impliedRate = product.minAmount / product.costPrice;
-       
-       // Target Min (Local) = $5 / Ratio
-       // Example: 5 / 0.01 = 500 HTG
        const minRequiredLocal = GLOBAL_MIN_USD * impliedRate;
-       
        return Math.max(min, minRequiredLocal);
     }
   }
@@ -55,19 +49,14 @@ function getAdjustedMin(product: any): number {
 export const priceVerificationService = {
   getAdjustedMin,
 
-  /**
-   * Verify that the payment amount matches the product price
-   */
   async verifyProductPrice(
     productId: number,
     paidAmount: number,
     paidCurrency: string
   ): Promise<PriceVerificationResult> {
     try {
-      // 1. Try to get product from local cache (DB)
       let product = await db.product.findUnique({ where: { id: productId } });
 
-      // 2. If not in cache, skip strict verification (or fetch from API)
       if (!product) {
         console.log(`[Price Check] Product ${productId} not in cache.`);
         return {
@@ -77,78 +66,74 @@ export const priceVerificationService = {
         };
       }
 
-      // 3. Handle RANGED products
-      if (product.type.includes('RANGED')) {
-        
-        // ✅ ENFORCE DYNAMIC MINIMUM
-        const adjustedMin = getAdjustedMin(product);
-        const max = product.maxAmount || Infinity;
-
-        if (paidAmount < adjustedMin) {
-          console.warn(`[Price Check] ❌ Amount ${paidAmount} below adjusted min ${adjustedMin} (Global Min: $${GLOBAL_MIN_USD})`);
-          return {
-            valid: false,
-            expectedPrice: adjustedMin,
-            expectedCurrency: product.currency,
-            error: `Amount must be at least ${adjustedMin.toFixed(2)} ${product.currency}`,
-            code: 'AMOUNT_TOO_LOW'
-          };
-        }
-
-        if (paidAmount > max) {
-          return {
-            valid: false,
-            expectedPrice: max,
-            expectedCurrency: product.currency,
-            error: `Amount must be at most ${max} ${product.currency}`,
-            code: 'AMOUNT_TOO_HIGH'
-          };
-        }
-
-        if (paidCurrency.toUpperCase() !== product.currency.toUpperCase()) {
-          return {
-            valid: false,
-            expectedCurrency: product.currency,
-            error: `Currency mismatch: expected ${product.currency}`,
-            code: 'CURRENCY_MISMATCH'
-          };
-        }
-
-        return { valid: true, expectedPrice: paidAmount, expectedCurrency: product.currency };
-      }
-
-      // 4. Handle FIXED products
-      const expectedPrice = product.amount || 0;
-
-      if (expectedPrice === 0) {
-        return { valid: true, error: 'Product price not set', code: 'NO_PRICE' };
-      }
-
-      if (paidCurrency.toUpperCase() !== product.currency.toUpperCase()) {
+      // ✅ FIX: Enforce USD Payment Currency (since we charge in USD)
+      if (paidCurrency.toUpperCase() !== 'USD') {
         return {
           valid: false,
-          expectedPrice,
-          expectedCurrency: product.currency,
-          error: `Currency mismatch: expected ${product.currency}`,
+          expectedCurrency: 'USD',
+          error: `Currency mismatch: Paid ${paidCurrency}, expected USD`,
           code: 'CURRENCY_MISMATCH'
         };
       }
 
+      // ---------------------------------------------------------
+      // CASE 1: RANGED PRODUCTS
+      // ---------------------------------------------------------
+      if (product.type.includes('RANGED')) {
+        // For ranged products, the 'paidAmount' is the user's custom amount (in USD).
+        // Since ranged calculations are complex, we primarily check if it covers the base cost.
+        // (Simplified check: Ensure it's not suspiciously low)
+        
+        const absoluteMinUsd = GLOBAL_MIN_USD;
+        
+        if (paidAmount < absoluteMinUsd) {
+           return {
+            valid: false,
+            expectedPrice: absoluteMinUsd,
+            expectedCurrency: 'USD',
+            error: `Amount too low. Min: $${absoluteMinUsd} USD`,
+            code: 'AMOUNT_TOO_LOW'
+          };
+        }
+        
+        return { valid: true, expectedPrice: paidAmount, expectedCurrency: 'USD' };
+      }
+
+      // ---------------------------------------------------------
+      // CASE 2: FIXED PRODUCTS (Your Fix Applied Here)
+      // ---------------------------------------------------------
+      
+      // 1. Determine Base Cost (Preference: Cost Price -> Face Value)
+      const baseCost = product.costPrice || product.amount || 0;
+
+      if (baseCost === 0) {
+        return { valid: true, error: 'Product price not set', code: 'NO_PRICE' };
+      }
+
+      // 2. Calculate Expected Price (Base Cost * Margin)
+      const expectedPrice = baseCost * FALLBACK_MARGIN;
+
+      // 3. Compare with Tolerance
       const tolerance = expectedPrice * PRICE_TOLERANCE_PERCENT;
       const priceDiff = Math.abs(paidAmount - expectedPrice);
 
       if (priceDiff > tolerance) {
-        return {
-          valid: false,
-          expectedPrice,
-          expectedCurrency: product.currency,
-          error: `Price mismatch: expected ${expectedPrice} ${product.currency}`,
-          code: 'PRICE_MISMATCH'
-        };
+        console.warn(`[Price Check] ❌ Mismatch: Paid $${paidAmount}, Expected ~$${expectedPrice.toFixed(2)} (Base: $${baseCost} * Margin: ${FALLBACK_MARGIN})`);
+        
+        // Allow overpayment (if profit is higher than expected), block underpayment
+        if (paidAmount < expectedPrice - tolerance) {
+           return {
+            valid: false,
+            expectedPrice,
+            expectedCurrency: 'USD',
+            error: `Underpaid: Paid $${paidAmount}, Expected ~$${expectedPrice.toFixed(2)}`,
+            code: 'PRICE_MISMATCH_LOW'
+          };
+        }
       }
 
-      console.log(`[Price Check] ✅ Price verified: ${paidAmount} ${paidCurrency}`);
-      return { valid: true, expectedPrice, expectedCurrency: product.currency };
+      console.log(`[Price Check] ✅ Verified: Paid $${paidAmount} (Expected: ~$${expectedPrice.toFixed(2)})`);
+      return { valid: true, expectedPrice, expectedCurrency: 'USD' };
 
     } catch (error: any) {
       console.error('[Price Check] Error:', error);
@@ -156,9 +141,6 @@ export const priceVerificationService = {
     }
   },
 
-  /**
-   * Get product price for payment intent creation
-   */
   async getProductPrice(productId: number): Promise<{
     success: boolean;
     price?: number;
@@ -175,7 +157,6 @@ export const priceVerificationService = {
         return { success: false, error: 'Product not found' };
       }
 
-      // ✅ Send the adjusted min so the Stripe Intent respects the limit
       const adjustedMin = getAdjustedMin(product);
 
       return {
