@@ -1,539 +1,631 @@
 "use strict";
-// server/Routes.ts - FIXED VERSION
-// Key Changes:
-// 1. Server-only price calculation
-// 2. Price verification BEFORE payment
-// 3. Simplified purchase flow (webhook-first)
-// 4. Database transactions for atomicity
-// 5. Better error handling
-var __assign = (this && this.__assign) || function () {
-    __assign = Object.assign || function(t) {
-        for (var s, i = 1, n = arguments.length; i < n; i++) {
-            s = arguments[i];
-            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p))
-                t[p] = s[p];
-        }
-        return t;
-    };
-    return __assign.apply(this, arguments);
-};
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
-    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
-    function verb(n) { return function (v) { return step([n, v]); }; }
-    function step(op) {
-        if (f) throw new TypeError("Generator is already executing.");
-        while (g && (g = 0, op[0] && (_ = 0)), _) try {
-            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
-            if (y = 0, t) op = [op[0] & 2, t.value];
-            switch (op[0]) {
-                case 0: case 1: t = op; break;
-                case 4: _.label++; return { value: op[1], done: false };
-                case 5: _.label++; y = op[1]; op = [0]; continue;
-                case 7: op = _.ops.pop(); _.trys.pop(); continue;
-                default:
-                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
-                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
-                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
-                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
-                    if (t[2]) _.ops.pop();
-                    _.trys.pop(); continue;
-            }
-            op = body.call(thisArg, _);
-        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
-        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
-    }
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-var express_1 = __importDefault(require("express"));
-var path_1 = __importDefault(require("path"));
-var stripe_1 = __importDefault(require("stripe"));
-var zod_1 = require("zod");
-var auth_1 = require("./middleware/auth");
-var dtone_1 = require("./dtone");
-var payment_1 = require("./payment");
-var db_1 = require("./db");
-var redis_1 = require("./services/redis"); // NEW: For webhook deduplication
-var app = (0, express_1.default)();
+const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
+const path_1 = __importDefault(require("path"));
+const stripe_1 = __importDefault(require("stripe"));
+const node_cron_1 = __importDefault(require("node-cron"));
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
+const helmet_1 = __importDefault(require("helmet"));
+const cookie_parser_1 = __importDefault(require("cookie-parser"));
+const zod_1 = require("zod");
+// Middleware
+const auth_1 = require("./middleware/auth");
+// Services
+const dtone_1 = require("./dtone");
+const sync_countries_1 = require("./scripts/sync-countries");
+const sync_operators_1 = require("./scripts/sync-operators");
+const sync_products_1 = require("./scripts/sync-products");
+const payment_1 = require("./payment");
+const auth_2 = require("./auth");
+const priceVerification_1 = require("./priceVerification");
+const db_1 = require("./db");
+const app = (0, express_1.default)();
 app.set('trust proxy', 1);
-var PORT = process.env.PORT || 5000;
-var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
-var FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
-var GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
-// ============================================================
-// 🔧 FIX #1: PRICE CALCULATION SERVICE (Server-Only)
-// ============================================================
-var PriceCalculationService = /** @class */ (function () {
-    function PriceCalculationService() {
+const PORT = process.env.PORT || 5000;
+const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
+const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
+const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
+// ==================================================================
+// 🚀 PERFORMANCE CACHE
+// ==================================================================
+let COUNTRY_CACHE = [];
+let OPERATOR_CACHE = [];
+// ✅ OPTIMIZATION: Pre-computed Index for O(1) Lookups
+let OPERATOR_INDEX = {};
+const rebuildOperatorIndex = (operators) => {
+    const index = {};
+    for (const op of operators) {
+        const code = op.countryCode || op.countryIso;
+        if (code) {
+            if (!index[code])
+                index[code] = [];
+            index[code].push(op);
+        }
     }
-    /**
-     * Calculate exact USD price user should pay
-     * Single source of truth - used by both intent creation and verification
-     */
-    PriceCalculationService.calculatePrice = function (product, customAmount) {
-        var _a;
-        var isRanged = ((_a = product.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE')) ||
-            (product.minAmount && product.maxAmount && product.minAmount !== product.maxAmount);
-        var baseCostUsd = 0;
-        var localAmount = 0;
-        var currency = product.currency;
+    OPERATOR_INDEX = index;
+    console.log(`[Cache] Operator Index Rebuilt: Indexed ${Object.keys(index).length} countries.`);
+};
+const initializeCache = async () => {
+    try {
+        const c = await (0, sync_countries_1.syncCountries)();
+        if (c)
+            COUNTRY_CACHE = c;
+        const o = await (0, sync_operators_1.syncOperators)();
+        if (o) {
+            OPERATOR_CACHE = o;
+            rebuildOperatorIndex(o); // Build index on startup
+        }
+        if (process.env.SYNC_ON_STARTUP === 'true')
+            await (0, sync_products_1.syncProducts)();
+    }
+    catch (e) {
+        console.error("Cache init failed", e);
+    }
+};
+initializeCache();
+node_cron_1.default.schedule('0 3 * * *', async () => {
+    console.log('[Scheduler] 🌙 Daily Sync...');
+    const [c, o] = await Promise.all([(0, sync_countries_1.syncCountries)(), (0, sync_operators_1.syncOperators)()]);
+    if (c)
+        COUNTRY_CACHE = c;
+    if (o) {
+        OPERATOR_CACHE = o;
+        rebuildOperatorIndex(o); // Rebuild index daily
+    }
+    await (0, sync_products_1.syncProducts)();
+});
+// ==================================================================
+// 🔒 SECURITY CONFIGURATION
+// ==================================================================
+app.use((0, helmet_1.default)({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            styleSrc: ["'self'", "'unsafe-inline'"],
+            scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
+            frameSrc: ["https://js.stripe.com"],
+            connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"],
+            imgSrc: ["'self'", "data:", "https:"]
+        }
+    }
+}));
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? (process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [])
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
+const isValidOrigin = (origin) => {
+    try {
+        const url = new URL(origin);
+        if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:')
+            return false;
+        return allowedOrigins.includes(origin);
+    }
+    catch {
+        return false;
+    }
+};
+app.use((0, cors_1.default)({
+    origin: (origin, callback) => {
+        if (!origin || isValidOrigin(origin))
+            return callback(null, true);
+        console.warn(`🚫 CORS Blocked: ${origin}`);
+        callback(new Error(`CORS policy: Origin ${origin} is not allowed`));
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key', 'stripe-signature', 'idempotency-key'],
+    maxAge: 86400
+}));
+app.use((0, cookie_parser_1.default)());
+const apiLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: "Too many requests, please try again later." }
+});
+const authLimiter = (0, express_rate_limit_1.default)({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    message: { error: "Too many login attempts. Please try again later." }
+});
+app.use('/api/', apiLimiter);
+// Deduplication
+const processedWebhooks = new Set();
+// ==================================================================
+// 🧩 UNIFIED PURCHASE LOGIC
+// ==================================================================
+async function processPurchase(data, source = 'API') {
+    const { paymentId, mobile, productId, amount, currency, type, userId } = data;
+    // 1. Check existing
+    const existing = await db_1.db.transaction.findUnique({
+        where: { paymentIntentId: paymentId }
+    });
+    if (existing) {
+        if (existing.status === 'COMPLETED') {
+            return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
+        }
+        if (['REFUNDED', 'FAILED'].includes(existing.status)) {
+            return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
+        }
+        if (existing.status === 'PENDING') {
+            const ageMs = Date.now() - new Date(existing.createdAt).getTime();
+            if (ageMs < 60000) {
+                console.log(`[Purchase] ⏭️ Already processing: ${paymentId}`);
+                return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
+            }
+        }
+    }
+    // 2. Lock / Create Transaction
+    if (!existing) {
+        try {
+            await db_1.db.transaction.create({
+                data: {
+                    externalId: `pending_${paymentId}`,
+                    paymentIntentId: paymentId,
+                    paymentId: paymentId,
+                    mobile,
+                    productId,
+                    amount,
+                    currency,
+                    productType: type,
+                    status: 'PENDING',
+                    processedVia: source,
+                    userId: userId || null
+                }
+            });
+            console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
+        }
+        catch (err) {
+            if (err.code === 'P2002') {
+                const check = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
+                return { success: check?.status === 'COMPLETED', dbStatus: check?.status, alreadyProcessed: true };
+            }
+            throw err;
+        }
+    }
+    // 3. Call DTOne API
+    const callbackUrl = process.env.DTONE_CALLBACK_URL
+        ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
+        : undefined;
+    const result = await dtone_1.dtoneService.purchaseProduct(productId, mobile, amount, currency, type, callbackUrl);
+    // 4. Handle Immediate Failure
+    if (!result.success || !result.data) {
+        console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
+        const refund = await payment_1.paymentService.refundPayment(paymentId);
+        await db_1.db.transaction.update({
+            where: { paymentIntentId: paymentId },
+            data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED', externalId: `failed_${paymentId}` }
+        });
+        // Audit Log
+        try {
+            await db_1.db.auditLog.create({
+                data: {
+                    action: 'PURCHASE_FAILED',
+                    userId: userId,
+                    metadata: { paymentId, error: result.error, refundId: refund?.id }
+                }
+            });
+        }
+        catch (e) {
+            console.error("Audit Log failed", e);
+        }
+        return { success: false, error: result.error, code: result.code, refunded: !!refund };
+    }
+    // 5. Handle Pending/Success
+    const statusId = result.data.statusId;
+    let dbStatus = 'PENDING';
+    if (statusId === 7) {
+        dbStatus = 'COMPLETED';
+        console.log(`[Purchase] ✅ Success! DTOne Ref: ${result.data.externalId}`);
+    }
+    else if ([3, 9].includes(statusId || 0)) {
+        console.warn(`[Purchase] ⚠️ Declined (Status ${statusId}). Refunding...`);
+        const refund = await payment_1.paymentService.refundPayment(paymentId);
+        dbStatus = 'FAILED';
+        try {
+            await db_1.db.auditLog.create({
+                data: {
+                    action: 'PURCHASE_DECLINED',
+                    userId: userId,
+                    metadata: { paymentId, statusId, refundId: refund?.id }
+                }
+            });
+        }
+        catch (e) { }
+    }
+    else {
+        console.log(`[Purchase] ⏳ Submitted (Status ${statusId}). Awaiting callback.`);
+    }
+    await db_1.db.transaction.update({
+        where: { paymentIntentId: paymentId },
+        data: { status: dbStatus, externalId: result.data.externalId }
+    });
+    return { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING', ...result.data, dbStatus, refunded: dbStatus === 'FAILED' };
+}
+// ==================================================================
+// 📡 DTONE WEBHOOK (FIXED: Added Null Check)
+// ==================================================================
+app.post('/api/hooks/dtone', express_1.default.urlencoded({ extended: true }), async (req, res) => {
+    try {
+        const { transaction_id, status, status_message } = req.body;
+        console.log(`[DTOne Webhook] Update for ${transaction_id}: ${status} (${status_message})`);
+        if (!transaction_id)
+            return res.status(400).send('Missing transaction_id');
+        const txn = await db_1.db.transaction.findFirst({
+            where: { externalId: transaction_id.toString() }
+        });
+        if (!txn)
+            return res.status(200).send('OK');
+        if (['COMPLETED', 'REFUNDED'].includes(txn.status)) {
+            return res.status(200).send('Already final');
+        }
+        const statusId = parseInt(status);
+        let newStatus = txn.status;
+        let shouldRefund = false;
+        if (statusId === 7)
+            newStatus = 'COMPLETED';
+        else if ([3, 9].includes(statusId)) {
+            newStatus = 'FAILED';
+            shouldRefund = true;
+        }
+        if (newStatus !== txn.status) {
+            await db_1.db.transaction.update({
+                where: { id: txn.id },
+                data: { status: newStatus, updatedAt: new Date() }
+            });
+            // ✅ FIX: Check if paymentIntentId exists before refunding
+            if (shouldRefund && txn.paymentIntentId) {
+                console.log(`[DTOne Webhook] Refunding ${txn.paymentIntentId}...`);
+                const refund = await payment_1.paymentService.refundPayment(txn.paymentIntentId);
+                await db_1.db.transaction.update({
+                    where: { id: txn.id },
+                    data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED' }
+                });
+                try {
+                    await db_1.db.auditLog.create({
+                        data: {
+                            action: 'ASYNC_REFUND',
+                            userId: txn.userId,
+                            metadata: { reason: status_message, dtoneId: transaction_id }
+                        }
+                    });
+                }
+                catch (e) { }
+            }
+            else if (shouldRefund && !txn.paymentIntentId) {
+                console.warn(`[DTOne Webhook] Cannot refund Txn ${txn.id}: No Payment ID found.`);
+            }
+        }
+        res.status(200).send('OK');
+    }
+    catch (error) {
+        console.error('[DTOne Webhook] Error:', error);
+        res.status(500).send('Error');
+    }
+});
+// ==================================================================
+// STRIPE WEBHOOK
+// ==================================================================
+app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }), async (req, res) => {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret || !sig)
+        return res.status(400).send('Webhook Error');
+    let event;
+    try {
+        event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    }
+    catch (err) {
+        return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+    if (processedWebhooks.has(event.id))
+        return res.json({ received: true });
+    processedWebhooks.add(event.id);
+    setTimeout(() => processedWebhooks.delete(event.id), 24 * 60 * 60 * 1000);
+    try {
+        if (event.type === 'payment_intent.succeeded') {
+            const paymentIntent = event.data.object;
+            await processPurchase({
+                paymentId: paymentIntent.id,
+                mobile: paymentIntent.metadata.mobile,
+                productId: Number(paymentIntent.metadata.productId),
+                amount: paymentIntent.amount / 100,
+                currency: paymentIntent.currency.toUpperCase(),
+                type: paymentIntent.metadata.type || 'UNKNOWN',
+                userId: paymentIntent.metadata.userId || undefined
+            }, 'WEBHOOK');
+        }
+        res.json({ received: true });
+    }
+    catch (error) {
+        console.error('Webhook handler failed:', error);
+        res.status(500).send('Webhook handler failed');
+    }
+});
+app.use(express_1.default.json());
+// ==================================================================
+// 🔐 AUTHENTICATION ROUTES (MISSING APIS RESTORED)
+// ==================================================================
+const registerSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
+    password: zod_1.z.string().min(8),
+    name: zod_1.z.string().min(1).optional()
+});
+const loginSchema = zod_1.z.object({
+    email: zod_1.z.string().email(),
+    password: zod_1.z.string().min(1)
+});
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+    try {
+        const { email, password, name } = registerSchema.parse(req.body);
+        const result = await auth_2.authService.register(email, password, name);
+        if (!result.success)
+            return res.status(400).json({ error: result.error });
+        res.cookie('refresh_token', result.refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            path: '/api/auth/refresh',
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+        return res.status(201).json({ message: 'Success', user: result.user, accessToken: result.accessToken });
+    }
+    catch (error) {
+        return res.status(400).json({ error: 'Registration failed' });
+    }
+});
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+    try {
+        const { email, password } = loginSchema.parse(req.body);
+        const result = await auth_2.authService.login(email, password);
+        if (!result.success)
+            return res.status(401).json({ error: result.error });
+        res.cookie('refresh_token', result.refreshToken, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'strict',
+            path: '/api/auth/refresh',
+            maxAge: 7 * 24 * 60 * 60 * 1000
+        });
+        return res.json({ message: 'Success', user: result.user, accessToken: result.accessToken });
+    }
+    catch (error) {
+        return res.status(500).json({ error: 'Login failed' });
+    }
+});
+app.post('/api/auth/refresh', async (req, res) => {
+    const refreshToken = req.cookies.refresh_token;
+    if (!refreshToken)
+        return res.sendStatus(401);
+    // Simple Device Info extraction
+    const deviceInfo = {
+        ip: req.ip || 'unknown',
+        userAgent: req.headers['user-agent'] || 'unknown'
+    };
+    const result = await auth_2.authService.refreshToken(refreshToken, deviceInfo);
+    if (!result.success) {
+        res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+        return res.status(403).json({ error: 'Session expired' });
+    }
+    res.cookie('refresh_token', result.refreshToken, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'strict',
+        path: '/api/auth/refresh',
+        maxAge: 7 * 24 * 60 * 60 * 1000
+    });
+    return res.json({ accessToken: result.accessToken });
+});
+app.post('/api/auth/logout', async (req, res) => {
+    res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+    res.json({ message: 'Logged out' });
+});
+app.get('/api/auth/me', auth_1.requireAuth, async (req, res) => {
+    return res.json({ user: req.user });
+});
+app.put('/api/auth/profile', auth_1.requireAuth, async (req, res) => {
+    const result = await auth_2.authService.updateProfile(req.user.id, req.body);
+    return result.success ? res.json({ user: result.user }) : res.status(400).json({ error: result.error });
+});
+app.post('/api/auth/change-password', auth_1.requireAuth, async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+    const result = await auth_2.authService.changePassword(req.user.id, currentPassword, newPassword);
+    return result.success ? res.json({ message: 'Password changed' }) : res.status(400).json({ error: result.error });
+});
+app.get('/api/user/transactions', auth_1.requireAuth, async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const skip = (page - 1) * limit;
+    const [transactions, total] = await Promise.all([
+        db_1.db.transaction.findMany({
+            where: { userId: req.user.id },
+            orderBy: { createdAt: 'desc' },
+            skip, take: limit
+        }),
+        db_1.db.transaction.count({ where: { userId: req.user.id } })
+    ]);
+    return res.json({ transactions, pagination: { page, limit, total }, pages: Math.ceil(total / limit) });
+});
+// ==================================================================
+// ⚡ OPTIMIZED PUBLIC API ROUTES
+// ==================================================================
+app.get('/api/countries', (_req, res) => res.json(COUNTRY_CACHE));
+app.get('/api/operators', (req, res) => {
+    const { country } = req.query;
+    // ✅ OPTIMIZATION: Use O(1) Index instead of .filter()
+    if (country) {
+        const code = String(country).toUpperCase();
+        return res.json(OPERATOR_INDEX[code] || []);
+    }
+    return res.json(OPERATOR_CACHE);
+});
+app.get('/api/products', async (req, res) => {
+    try {
+        const { operatorId, currency, ranged, page, limit } = req.query;
+        if (!operatorId)
+            return res.status(400).json({ error: 'Operator ID required' });
+        const opId = Number(operatorId);
+        const whereClause = { operatorId: opId };
+        if (currency)
+            whereClause.currency = String(currency).toUpperCase();
+        if (ranged === 'true') {
+            whereClause.OR = [
+                { type: { contains: 'RANGE' } },
+                { minAmount: { not: null }, maxAmount: { not: null } }
+            ];
+        }
+        // ✅ OPTIMIZATION: Pagination
+        const pageNum = Number(page) || 1;
+        const limitNum = Number(limit) || 100;
+        const skip = (pageNum - 1) * limitNum;
+        const localProducts = await db_1.db.product.findMany({
+            where: whereClause,
+            orderBy: { amount: 'asc' },
+            take: limitNum,
+            skip: skip
+        });
+        if (localProducts.length > 0)
+            return res.json(localProducts);
+        console.log(`[Cache Miss] Fetching products for Op ${opId}`);
+        const result = await dtone_1.dtoneService.getProductsForOperator(opId, pageNum, limitNum, 'en');
+        if (!result.success || !result.data) {
+            return res.status(400).json({ error: result.error, code: result.code });
+        }
+        return res.json(result.data);
+    }
+    catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+app.post('/api/lookup', async (req, res) => {
+    const { mobile } = req.body;
+    if (!mobile)
+        return res.status(400).json({ error: 'Mobile required' });
+    try {
+        const result = await dtone_1.dtoneService.lookupMobileNumber(mobile);
+        if (!result.success)
+            return res.status(404).json({ error: result.error });
+        return res.json(result.data);
+    }
+    catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+// ==================================================================
+// 🔐 SECURE PAYMENT & PURCHASE ROUTES (MISSING APIS RESTORED)
+// ==================================================================
+app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
+    const { mobile, productId, type, customAmount } = req.body;
+    const idempotencyKey = req.headers['idempotency-key'];
+    if (!productId)
+        return res.status(400).json({ error: 'Product ID required' });
+    try {
+        const product = await db_1.db.product.findUnique({ where: { id: productId } });
+        if (!product)
+            return res.status(400).json({ error: 'Invalid product' });
+        let baseCostUsd = 0;
+        const isRanged = product.type.includes('RANGE') || (product.minAmount && product.maxAmount);
         if (isRanged) {
-            if (!customAmount) {
-                throw new Error('Custom amount required for ranged products');
-            }
-            var min = product.minAmount || 0;
-            var max = product.maxAmount || Infinity;
+            if (!customAmount)
+                return res.status(400).json({ error: 'Custom amount required' });
+            const min = product.minAmount || 0;
+            const max = product.maxAmount || Infinity;
             if (customAmount < min || customAmount > max) {
-                throw new Error("Amount must be between ".concat(min, " and ").concat(max, " ").concat(currency));
+                return res.status(400).json({ error: `Amount must be between ${min} and ${max}` });
             }
-            // Calculate proportional cost
-            var costMin = product.costPriceMin || product.costPrice || 0;
-            var unitMin = product.minAmount || 1;
+            const costMin = product.costPriceMin || product.costPrice || 0;
+            const unitMin = product.minAmount || 1;
             baseCostUsd = customAmount * (costMin / unitMin);
-            localAmount = customAmount;
         }
         else {
-            // Fixed product
             baseCostUsd = product.costPrice || product.amount || 0;
-            localAmount = product.amount || 0;
         }
-        // Apply margin
-        var finalPrice = baseCostUsd * FALLBACK_MARGIN;
-        // Enforce minimum
-        if (finalPrice < GLOBAL_MIN_USD) {
-            throw new Error("Minimum order is $".concat(GLOBAL_MIN_USD, " USD"));
+        const finalCharge = baseCostUsd * FALLBACK_MARGIN;
+        if (finalCharge < GLOBAL_MIN_USD) {
+            return res.status(400).json({ error: `Minimum order is $${GLOBAL_MIN_USD} USD` });
         }
-        return {
-            usdPrice: finalPrice,
-            localAmount: localAmount,
-            currency: currency,
-            breakdown: {
-                baseCost: baseCostUsd,
-                margin: FALLBACK_MARGIN,
-                finalPrice: finalPrice
-            }
-        };
-    };
-    /**
-     * Get adjusted minimum for ranged products considering USD minimum
-     */
-    PriceCalculationService.getEffectiveMin = function (product) {
-        var _a;
-        if (!((_a = product.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE'))) {
-            return product.amount || 0;
-        }
-        var min = product.minAmount || 0;
-        if (!product.costPrice || !product.minAmount) {
-            return min;
-        }
-        // Calculate local currency equivalent of $5 USD
-        var costPerUnit = product.costPrice / product.minAmount;
-        var minRequiredLocal = GLOBAL_MIN_USD / (costPerUnit * FALLBACK_MARGIN);
-        return Math.max(min, Math.ceil(minRequiredLocal));
-    };
-    return PriceCalculationService;
-}());
-// ============================================================
-// 🔧 FIX #2: WEBHOOK DEDUPLICATION WITH REDIS
-// ============================================================
-var redis = new redis_1.RedisService();
-function isWebhookProcessed(eventId) {
-    return __awaiter(this, void 0, void 0, function () {
-        var key, exists;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0:
-                    key = "webhook:".concat(eventId);
-                    return [4 /*yield*/, redis.get(key)];
-                case 1:
-                    exists = _a.sent();
-                    if (exists)
-                        return [2 /*return*/, true];
-                    // Mark as processed for 24 hours
-                    return [4 /*yield*/, redis.set(key, '1', 86400)];
-                case 2:
-                    // Mark as processed for 24 hours
-                    _a.sent();
-                    return [2 /*return*/, false];
-            }
-        });
-    });
-}
-// ============================================================
-// 🔧 FIX #3: SIMPLIFIED PURCHASE FLOW (Webhook-Primary)
-// ============================================================
-/**
- * Process purchase with database transaction for atomicity
- * Called ONLY from webhook (API just creates intent)
- */
-function processWebhookPurchase(paymentIntent) {
-    return __awaiter(this, void 0, void 0, function () {
-        var paymentId, mobile, productId, localAmount, userId;
-        var _this = this;
-        return __generator(this, function (_a) {
-            switch (_a.label) {
-                case 0:
-                    paymentId = paymentIntent.id;
-                    mobile = paymentIntent.metadata.mobile;
-                    productId = Number(paymentIntent.metadata.productId);
-                    localAmount = paymentIntent.metadata.localAmount;
-                    userId = paymentIntent.metadata.userId || null;
-                    console.log("[Webhook] Processing: ".concat(paymentId));
-                    // Use Prisma transaction for atomicity
-                    return [4 /*yield*/, db_1.db.$transaction(function (tx) { return __awaiter(_this, void 0, void 0, function () {
-                            var existing, txnRecord, callbackUrl, result, finalStatus, shouldRefund, statusId;
-                            var _this = this;
-                            var _a;
-                            return __generator(this, function (_b) {
-                                switch (_b.label) {
-                                    case 0: return [4 /*yield*/, tx.transaction.findUnique({
-                                            where: { paymentIntentId: paymentId }
-                                        })];
-                                    case 1:
-                                        existing = _b.sent();
-                                        if (existing) {
-                                            if (existing.status === 'COMPLETED') {
-                                                console.log("[Webhook] Already completed: ".concat(paymentId));
-                                                return [2 /*return*/];
-                                            }
-                                            if (['FAILED', 'REFUNDED'].includes(existing.status)) {
-                                                console.log("[Webhook] Already failed/refunded: ".concat(paymentId));
-                                                return [2 /*return*/];
-                                            }
-                                        }
-                                        return [4 /*yield*/, tx.transaction.upsert({
-                                                where: { paymentIntentId: paymentId },
-                                                create: {
-                                                    externalId: "pending_".concat(paymentId),
-                                                    paymentIntentId: paymentId,
-                                                    paymentId: paymentId,
-                                                    mobile: mobile,
-                                                    productId: productId,
-                                                    amount: paymentIntent.amount / 100,
-                                                    currency: paymentIntent.currency.toUpperCase(),
-                                                    productType: paymentIntent.metadata.type || 'UNKNOWN',
-                                                    status: 'PROCESSING',
-                                                    processedVia: 'WEBHOOK',
-                                                    userId: userId
-                                                },
-                                                update: {
-                                                    status: 'PROCESSING',
-                                                    updatedAt: new Date()
-                                                }
-                                            })];
-                                    case 2:
-                                        txnRecord = _b.sent();
-                                        callbackUrl = process.env.DTONE_CALLBACK_URL
-                                            ? "".concat(process.env.DTONE_CALLBACK_URL, "/api/hooks/dtone")
-                                            : undefined;
-                                        return [4 /*yield*/, dtone_1.dtoneService.purchaseProduct(productId, mobile, localAmount ? parseFloat(localAmount) : 0, paymentIntent.currency.toUpperCase(), paymentIntent.metadata.type, callbackUrl)];
-                                    case 3:
-                                        result = _b.sent();
-                                        finalStatus = 'PENDING';
-                                        shouldRefund = false;
-                                        if (!result.success || !result.data) {
-                                            console.error("[Webhook] DTOne failed: ".concat(result.error));
-                                            finalStatus = 'FAILED';
-                                            shouldRefund = true;
-                                        }
-                                        else {
-                                            statusId = result.data.statusId;
-                                            if (statusId === 7) {
-                                                finalStatus = 'COMPLETED';
-                                            }
-                                            else if ([3, 9].includes(statusId || 0)) {
-                                                finalStatus = 'FAILED';
-                                                shouldRefund = true;
-                                            }
-                                            else {
-                                                finalStatus = 'PENDING'; // Awaiting DTOne callback
-                                            }
-                                        }
-                                        // Update transaction with final status
-                                        return [4 /*yield*/, tx.transaction.update({
-                                                where: { id: txnRecord.id },
-                                                data: {
-                                                    status: finalStatus,
-                                                    externalId: ((_a = result.data) === null || _a === void 0 ? void 0 : _a.externalId) || "failed_".concat(paymentId),
-                                                    updatedAt: new Date()
-                                                }
-                                            })];
-                                    case 4:
-                                        // Update transaction with final status
-                                        _b.sent();
-                                        // Handle refund outside transaction
-                                        if (shouldRefund) {
-                                            // Schedule refund in background (don't block webhook response)
-                                            setImmediate(function () { return __awaiter(_this, void 0, void 0, function () {
-                                                var refund;
-                                                return __generator(this, function (_a) {
-                                                    switch (_a.label) {
-                                                        case 0: return [4 /*yield*/, payment_1.paymentService.refundPayment(paymentId)];
-                                                        case 1:
-                                                            refund = _a.sent();
-                                                            return [4 /*yield*/, db_1.db.transaction.update({
-                                                                    where: { paymentIntentId: paymentId },
-                                                                    data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED' }
-                                                                })];
-                                                        case 2:
-                                                            _a.sent();
-                                                            return [2 /*return*/];
-                                                    }
-                                                });
-                                            }); });
-                                        }
-                                        return [2 /*return*/];
-                                }
-                            });
-                        }); }, {
-                            maxWait: 10000, // 10 seconds max wait for lock
-                            timeout: 30000 // 30 seconds total timeout
-                        })];
-                case 1:
-                    // Use Prisma transaction for atomicity
-                    _a.sent();
-                    return [2 /*return*/];
-            }
-        });
-    });
-}
-// ============================================================
-// 🔧 FIX #4: STRIPE WEBHOOK (With Deduplication)
-// ============================================================
-app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }), function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var sig, webhookSecret, event, paymentIntent_1, paymentIntent, error_1;
-    return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0:
-                sig = req.headers['stripe-signature'];
-                webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-                if (!webhookSecret || !sig) {
-                    return [2 /*return*/, res.status(400).send('Webhook Error: Missing signature')];
-                }
-                try {
-                    event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
-                }
-                catch (err) {
-                    console.error('[Webhook] Signature verification failed:', err.message);
-                    return [2 /*return*/, res.status(400).send("Webhook Error: ".concat(err.message))];
-                }
-                return [4 /*yield*/, isWebhookProcessed(event.id)];
-            case 1:
-                // Check if already processed (Redis-based)
-                if (_a.sent()) {
-                    console.log("[Webhook] Duplicate event ignored: ".concat(event.id));
-                    return [2 /*return*/, res.json({ received: true, duplicate: true })];
-                }
-                _a.label = 2;
-            case 2:
-                _a.trys.push([2, 5, , 6]);
-                if (event.type === 'payment_intent.succeeded') {
-                    paymentIntent_1 = event.data.object;
-                    // Process in background, respond immediately
-                    setImmediate(function () { return processWebhookPurchase(paymentIntent_1); });
-                    return [2 /*return*/, res.json({ received: true })];
-                }
-                if (!(event.type === 'payment_intent.payment_failed')) return [3 /*break*/, 4];
-                paymentIntent = event.data.object;
-                return [4 /*yield*/, db_1.db.transaction.updateMany({
-                        where: { paymentIntentId: paymentIntent.id },
-                        data: { status: 'PAYMENT_FAILED' }
-                    })];
-            case 3:
-                _a.sent();
-                _a.label = 4;
-            case 4:
-                res.json({ received: true });
-                return [3 /*break*/, 6];
-            case 5:
-                error_1 = _a.sent();
-                console.error('[Webhook] Processing error:', error_1);
-                res.status(500).send('Webhook handler failed');
-                return [3 /*break*/, 6];
-            case 6: return [2 /*return*/];
-        }
-    });
-}); });
-app.use(express_1.default.json());
-// ============================================================
-// 🔧 FIX #5: SECURE PAYMENT INTENT (Server-Side Price Calc)
-// ============================================================
-app.post('/api/create-payment-intent', auth_1.optionalAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, mobile, productId, type, customAmount, idempotencyKey, product, priceCalc, result, error_2;
-    var _b, _c;
-    return __generator(this, function (_d) {
-        switch (_d.label) {
-            case 0:
-                _a = req.body, mobile = _a.mobile, productId = _a.productId, type = _a.type, customAmount = _a.customAmount;
-                idempotencyKey = req.headers['idempotency-key'];
-                if (!productId || !mobile) {
-                    return [2 /*return*/, res.status(400).json({ error: 'Product ID and mobile required' })];
-                }
-                _d.label = 1;
-            case 1:
-                _d.trys.push([1, 4, , 5]);
-                return [4 /*yield*/, db_1.db.product.findUnique({ where: { id: productId } })];
-            case 2:
-                product = _d.sent();
-                if (!product) {
-                    return [2 /*return*/, res.status(400).json({ error: 'Product not found' })];
-                }
-                priceCalc = void 0;
-                try {
-                    priceCalc = PriceCalculationService.calculatePrice(product, customAmount);
-                }
-                catch (err) {
-                    return [2 /*return*/, res.status(400).json({ error: err.message })];
-                }
-                return [4 /*yield*/, payment_1.paymentService.createPaymentIntent(priceCalc.usdPrice, 'USD', // Always charge in USD
-                    {
-                        mobile: mobile,
-                        productId: productId.toString(),
-                        type: type || product.type,
-                        userId: (_b = req.user) === null || _b === void 0 ? void 0 : _b.id,
-                        localAmount: priceCalc.localAmount.toString()
-                    }, idempotencyKey)];
-            case 3:
-                result = _d.sent();
-                // 4. Return with price breakdown for transparency
-                return [2 /*return*/, res.json(__assign(__assign({}, result), { isGuest: !req.user, userId: (_c = req.user) === null || _c === void 0 ? void 0 : _c.id, chargeAmount: priceCalc.usdPrice, localAmount: priceCalc.localAmount, currency: priceCalc.currency, breakdown: priceCalc.breakdown }))];
-            case 4:
-                error_2 = _d.sent();
-                console.error('[Payment Intent] Error:', error_2);
-                return [2 /*return*/, res.status(500).json({ error: 'Failed to create payment intent' })];
-            case 5: return [2 /*return*/];
-        }
-    });
-}); });
-// ============================================================
-// 🔧 FIX #6: SIMPLIFIED PURCHASE API (Intent Only)
-// ============================================================
-var purchaseSchema = zod_1.z.object({
+        const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
+            mobile,
+            productId: productId.toString(),
+            type,
+            userId: req.user?.id,
+            localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
+        }, idempotencyKey);
+        res.json({ ...result, isGuest: !req.user, userId: req.user?.id });
+    }
+    catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+const purchaseSchema = zod_1.z.object({
     productId: zod_1.z.number().int().positive(),
     mobile: zod_1.z.string().min(7).max(15),
-    amount: zod_1.z.number().positive().optional(),
+    amount: zod_1.z.number().positive(),
     unit: zod_1.z.string().length(3).optional(),
     paymentId: zod_1.z.string().startsWith("pi_"),
     type: zod_1.z.string().optional()
 });
-app.post('/api/purchase', auth_1.optionalAuth, function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var _a, productId, mobile, paymentId, paymentIntent, originalPayerId, currentUser, existing, error_3;
-    var _b, _c;
-    return __generator(this, function (_d) {
-        switch (_d.label) {
-            case 0:
-                _d.trys.push([0, 3, , 4]);
-                _a = purchaseSchema.parse(req.body), productId = _a.productId, mobile = _a.mobile, paymentId = _a.paymentId;
-                return [4 /*yield*/, stripe.paymentIntents.retrieve(paymentId)];
-            case 1:
-                paymentIntent = _d.sent();
-                if (paymentIntent.status !== 'succeeded') {
-                    return [2 /*return*/, res.status(403).json({
-                            error: 'Payment not completed',
-                            status: paymentIntent.status
-                        })];
-                }
-                originalPayerId = (_b = paymentIntent.metadata) === null || _b === void 0 ? void 0 : _b.userId;
-                currentUser = (_c = req.user) === null || _c === void 0 ? void 0 : _c.id;
-                if (originalPayerId && currentUser && originalPayerId !== currentUser) {
-                    console.error("[Security] Payment hijacking attempt: ".concat(paymentId));
-                    return [2 /*return*/, res.status(403).json({
-                            error: 'Security violation: Payment ownership mismatch'
-                        })];
-                }
-                return [4 /*yield*/, db_1.db.transaction.findUnique({
-                        where: { paymentIntentId: paymentId }
-                    })];
-            case 2:
-                existing = _d.sent();
-                if (existing) {
-                    // Return current status
-                    return [2 /*return*/, res.json({
-                            success: existing.status === 'COMPLETED',
-                            status: existing.status,
-                            externalId: existing.externalId,
-                            message: 'Transaction already processed',
-                            alreadyProcessed: true
-                        })];
-                }
-                // 4. Return pending - webhook will complete
-                return [2 /*return*/, res.json({
-                        success: true,
-                        status: 'PENDING',
-                        message: 'Payment confirmed. Processing recharge...',
-                        paymentId: paymentId
-                    })];
-            case 3:
-                error_3 = _d.sent();
-                console.error('[Purchase] Error:', error_3);
-                if (error_3 instanceof zod_1.z.ZodError) {
-                    return [2 /*return*/, res.status(400).json({ error: 'Invalid request data' })];
-                }
-                return [2 /*return*/, res.status(500).json({ error: 'Purchase failed' })];
-            case 4: return [2 /*return*/];
+app.post('/api/purchase', auth_1.optionalAuth, async (req, res) => {
+    try {
+        const { productId, mobile, unit, paymentId, type } = purchaseSchema.parse(req.body);
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
+        if (paymentIntent.status !== 'succeeded') {
+            return res.status(403).json({ error: 'Payment not completed.' });
         }
-    });
-}); });
-// ============================================================
-// 🔧 FIX #7: TRANSACTION STATUS WITH POLLING
-// ============================================================
-app.get('/api/transaction/:paymentId', function (req, res) { return __awaiter(void 0, void 0, void 0, function () {
-    var paymentId, txn, error_4;
-    return __generator(this, function (_a) {
-        switch (_a.label) {
-            case 0:
-                paymentId = req.params.paymentId;
-                _a.label = 1;
-            case 1:
-                _a.trys.push([1, 3, , 4]);
-                return [4 /*yield*/, db_1.db.transaction.findUnique({
-                        where: { paymentIntentId: paymentId },
-                        select: {
-                            status: true,
-                            externalId: true,
-                            amount: true,
-                            currency: true,
-                            createdAt: true,
-                            updatedAt: true
-                        }
-                    })];
-            case 2:
-                txn = _a.sent();
-                if (!txn) {
-                    return [2 /*return*/, res.json({
-                            status: 'PENDING',
-                            message: 'Transaction not yet created'
-                        })];
-                }
-                return [2 /*return*/, res.json(txn)];
-            case 3:
-                error_4 = _a.sent();
-                console.error('[Status Check] Error:', error_4);
-                return [2 /*return*/, res.status(500).json({ error: 'Status check failed' })];
-            case 4: return [2 /*return*/];
+        const originalPayerId = paymentIntent.metadata?.userId;
+        const currentUser = req.user?.id;
+        if (originalPayerId && currentUser && originalPayerId !== currentUser) {
+            return res.status(403).json({ error: 'Security Violation: Payment ownership mismatch.' });
         }
-    });
-}); });
-// ============================================================
-// OTHER ENDPOINTS (Keep existing auth, products, etc.)
-// ============================================================
-// ... (Keep all your existing auth routes, products, operators, etc.)
-// Static files
-var DIST_PATH = path_1.default.join(process.cwd(), 'dist');
-app.use(express_1.default.static(DIST_PATH));
-app.get(/(.*)/, function (_req, res) { return res.sendFile(path_1.default.join(DIST_PATH, 'index.html')); });
-app.listen(Number(PORT), '0.0.0.0', function () {
-    return console.log("\uD83D\uDE80 API Server running on port ".concat(PORT));
+        const existingTxn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
+        if (existingTxn) {
+            return res.json({ success: true, ...existingTxn, dbStatus: existingTxn.status, alreadyProcessed: true });
+        }
+        const paidAmount = paymentIntent.amount / 100;
+        const paidCurrency = paymentIntent.currency.toUpperCase();
+        const priceCheck = await priceVerification_1.priceVerificationService.verifyProductPrice(productId, paidAmount, paidCurrency);
+        if (!priceCheck.valid && !['CACHE_MISS', 'NO_PRICE'].includes(priceCheck.code || '')) {
+            await payment_1.paymentService.refundPayment(paymentId);
+            return res.status(403).json({ error: 'Price verification failed. Payment refunded.' });
+        }
+        const result = await processPurchase({
+            paymentId,
+            mobile,
+            productId,
+            amount: paidAmount,
+            currency: unit || paidCurrency,
+            type: type || 'UNKNOWN',
+            userId: originalPayerId || undefined
+        }, 'API');
+        return res.json({ ...result, isGuest: !originalPayerId });
+    }
+    catch (error) {
+        console.error("Purchase Error:", error);
+        return res.status(500).json({ error: 'Internal server error' });
+    }
 });
+app.get('/api/transaction/:paymentId', async (req, res) => {
+    const { paymentId } = req.params;
+    try {
+        const txn = await db_1.db.transaction.findUnique({
+            where: { paymentIntentId: paymentId }
+        });
+        if (!txn)
+            return res.json({ status: 'PENDING' });
+        return res.json({ status: txn.status, externalId: txn.externalId });
+    }
+    catch (error) {
+        return res.status(500).json({ error: error.message });
+    }
+});
+// ==================================================================
+// STATIC FILES
+// ==================================================================
+const DIST_PATH = path_1.default.join(process.cwd(), 'dist');
+app.use(express_1.default.static(DIST_PATH));
+app.get(/(.*)/, (_req, res) => res.sendFile(path_1.default.join(DIST_PATH, 'index.html')));
+app.listen(Number(PORT), '0.0.0.0', () => console.log(`🚀 API Server running on port ${PORT}`));

@@ -1,68 +1,23 @@
 "use strict";
 // server/dtone.ts
-var __awaiter = (this && this.__awaiter) || function (thisArg, _arguments, P, generator) {
-    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
-    return new (P || (P = Promise))(function (resolve, reject) {
-        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
-        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
-        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
-        step((generator = generator.apply(thisArg, _arguments || [])).next());
-    });
-};
-var __generator = (this && this.__generator) || function (thisArg, body) {
-    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g = Object.create((typeof Iterator === "function" ? Iterator : Object).prototype);
-    return g.next = verb(0), g["throw"] = verb(1), g["return"] = verb(2), typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
-    function verb(n) { return function (v) { return step([n, v]); }; }
-    function step(op) {
-        if (f) throw new TypeError("Generator is already executing.");
-        while (g && (g = 0, op[0] && (_ = 0)), _) try {
-            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
-            if (y = 0, t) op = [op[0] & 2, t.value];
-            switch (op[0]) {
-                case 0: case 1: t = op; break;
-                case 4: _.label++; return { value: op[1], done: false };
-                case 5: _.label++; y = op[1]; op = [0]; continue;
-                case 7: op = _.ops.pop(); _.trys.pop(); continue;
-                default:
-                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
-                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
-                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
-                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
-                    if (t[2]) _.ops.pop();
-                    _.trys.pop(); continue;
-            }
-            op = body.call(thisArg, _);
-        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
-        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
-    }
-};
-var __spreadArray = (this && this.__spreadArray) || function (to, from, pack) {
-    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
-        if (ar || !(i in from)) {
-            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
-            ar[i] = from[i];
-        }
-    }
-    return to.concat(ar || Array.prototype.slice.call(from));
-};
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.dtoneService = void 0;
 // @ts-ignore
-var dtone_1 = __importDefault(require("@api/dtone"));
-var dotenv_1 = __importDefault(require("dotenv"));
+const dtone_1 = __importDefault(require("@api/dtone"));
+const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 // ==========================================
 // 1. CONFIGURATION
 // ==========================================
-var DTONE_API_KEY = process.env.DTONE_API_KEY;
-var DTONE_API_SECRET = process.env.DTONE_API_SECRET;
-var DTONE_MODE = process.env.DTONE_MODE || 'sandbox';
+const DTONE_API_KEY = process.env.DTONE_API_KEY;
+const DTONE_API_SECRET = process.env.DTONE_API_SECRET;
+const DTONE_MODE = process.env.DTONE_MODE || 'sandbox';
 // 1.15 = 15% profit on top of wholesale rate
 // ✅ UPDATED: Read from .env, default to 1.15 if missing
-var FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
+const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 if (!DTONE_API_KEY || !DTONE_API_SECRET) {
     throw new Error('FATAL: Missing DTOne credentials in .env file');
 }
@@ -79,9 +34,9 @@ else {
 // 2. UTILITY FUNCTIONS
 // ==========================================
 function formatMobileForDtOne(mobile) {
-    var cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
+    let cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
     if (!cleanMobile.startsWith('+')) {
-        cleanMobile = "+".concat(cleanMobile);
+        cleanMobile = `+${cleanMobile}`;
     }
     return cleanMobile;
 }
@@ -89,25 +44,24 @@ function validateMobileNumber(mobile) {
     return /^\+[1-9][0-9]{6,14}$/.test(mobile);
 }
 function generateTransactionId() {
-    var timestamp = Date.now();
-    var randomStr = Math.random().toString(36).substr(2, 9);
-    return "txn_".concat(timestamp, "_").concat(randomStr);
+    const timestamp = Date.now();
+    const randomStr = Math.random().toString(36).substr(2, 9);
+    return `txn_${timestamp}_${randomStr}`;
 }
 function handleApiError(error, context) {
-    var _a, _b, _c, _d, _e, _f, _g;
-    var msg = ((_d = (_c = (_b = (_a = error.response) === null || _a === void 0 ? void 0 : _a.data) === null || _b === void 0 ? void 0 : _b.errors) === null || _c === void 0 ? void 0 : _c[0]) === null || _d === void 0 ? void 0 : _d.message) || error.message || 'Unknown error';
-    if ((_e = error.response) === null || _e === void 0 ? void 0 : _e.data) {
-        console.error("\u274C [DTOne ".concat(context, "] Full API Error Response:"), JSON.stringify(error.response.data, null, 2));
+    const msg = error.response?.data?.errors?.[0]?.message || error.message || 'Unknown error';
+    if (error.response?.data) {
+        console.error(`❌ [DTOne ${context}] Full API Error Response:`, JSON.stringify(error.response.data, null, 2));
     }
     else {
-        console.error("\u274C [DTOne ".concat(context, "] Error:"), error.message);
+        console.error(`❌ [DTOne ${context}] Error:`, error.message);
     }
-    if (error.status === 401 || ((_f = error.response) === null || _f === void 0 ? void 0 : _f.status) === 401) {
+    if (error.status === 401 || error.response?.status === 401) {
         console.error('[DTOne] ❌ AUTH ERROR: Check Credentials');
         return { error: 'Authentication failed', code: 'AUTH_ERROR' };
     }
-    console.error("[DTOne] ".concat(context, " Failed: ").concat(msg));
-    if (error.status === 422 || ((_g = error.response) === null || _g === void 0 ? void 0 : _g.status) === 422) {
+    console.error(`[DTOne] ${context} Failed: ${msg}`);
+    if (error.status === 422 || error.response?.status === 422) {
         return { error: msg, code: 'VALIDATION_ERROR' };
     }
     return { error: msg, code: 'API_ERROR' };
@@ -119,381 +73,287 @@ exports.dtoneService = {
     // ----------------------------------------
     // A. GET COUNTRIES
     // ----------------------------------------
-    getCountries: function () {
-        return __awaiter(this, arguments, void 0, function (serviceId) {
-            var page, allCountries, hasMore, response, raw, list, _i, list_1, c, iso, error_1, err;
-            if (serviceId === void 0) { serviceId = 1; }
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        if (!serviceId || serviceId <= 0) {
-                            return [2 /*return*/, { success: false, error: 'Invalid service ID', code: 'INVALID_SERVICE_ID' }];
-                        }
-                        console.log("[DTOne] Fetching Countries for Service ".concat(serviceId, "..."));
-                        _a.label = 1;
-                    case 1:
-                        _a.trys.push([1, 5, , 6]);
-                        page = 1;
-                        allCountries = [];
-                        hasMore = true;
-                        _a.label = 2;
-                    case 2:
-                        if (!hasMore) return [3 /*break*/, 4];
-                        return [4 /*yield*/, dtone_1.default.getCountries({
-                                service_id: serviceId,
-                                page: page,
-                                per_page: 100
-                            })];
-                    case 3:
-                        response = _a.sent();
-                        raw = response.data || response;
-                        list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || []));
-                        if (list.length === 0) {
-                            hasMore = false;
-                        }
-                        else {
-                            for (_i = 0, list_1 = list; _i < list_1.length; _i++) {
-                                c = list_1[_i];
-                                iso = c.iso_code || c.isoCode;
-                                if (iso && c.name) {
-                                    allCountries.push({
-                                        iso_code: iso,
-                                        name: c.name
-                                    });
-                                }
-                            }
-                            if (list.length < 100) {
-                                hasMore = false;
-                            }
-                            else {
-                                page++;
-                            }
-                        }
-                        return [3 /*break*/, 2];
-                    case 4:
-                        allCountries.sort(function (a, b) { return a.name.localeCompare(b.name); });
-                        return [2 /*return*/, { success: true, data: allCountries }];
-                    case 5:
-                        error_1 = _a.sent();
-                        err = handleApiError(error_1, 'Get Countries');
-                        return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 6: return [2 /*return*/];
+    async getCountries(serviceId = 1) {
+        if (!serviceId || serviceId <= 0) {
+            return { success: false, error: 'Invalid service ID', code: 'INVALID_SERVICE_ID' };
+        }
+        console.log(`[DTOne] Fetching Countries for Service ${serviceId}...`);
+        try {
+            let page = 1;
+            let allCountries = [];
+            let hasMore = true;
+            while (hasMore) {
+                const response = await dtone_1.default.getCountries({
+                    service_id: serviceId,
+                    page: page,
+                    per_page: 100
+                });
+                const raw = response.data || response;
+                const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || []));
+                if (list.length === 0) {
+                    hasMore = false;
                 }
-            });
-        });
+                else {
+                    for (const c of list) {
+                        const iso = c.iso_code || c.isoCode;
+                        if (iso && c.name) {
+                            allCountries.push({
+                                iso_code: iso,
+                                name: c.name
+                            });
+                        }
+                    }
+                    if (list.length < 100) {
+                        hasMore = false;
+                    }
+                    else {
+                        page++;
+                    }
+                }
+            }
+            allCountries.sort((a, b) => a.name.localeCompare(b.name));
+            return { success: true, data: allCountries };
+        }
+        catch (error) {
+            const err = handleApiError(error, 'Get Countries');
+            return { success: false, error: err.error, code: err.code };
+        }
     },
     // ----------------------------------------
     // B. LOOKUP MOBILE NUMBER
     // ----------------------------------------
-    lookupMobileNumber: function (mobile) {
-        return __awaiter(this, void 0, void 0, function () {
-            var cleanMobile, response, result, match, error_2, err;
-            var _a;
-            return __generator(this, function (_b) {
-                switch (_b.label) {
-                    case 0:
-                        cleanMobile = formatMobileForDtOne(mobile);
-                        console.log("[DTOne] Looking up operator for: ".concat(cleanMobile));
-                        if (!validateMobileNumber(cleanMobile)) {
-                            return [2 /*return*/, { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' }];
-                        }
-                        _b.label = 1;
-                    case 1:
-                        _b.trys.push([1, 3, , 4]);
-                        return [4 /*yield*/, dtone_1.default.postLookupMobileNumber({ mobile_number: cleanMobile })];
-                    case 2:
-                        response = _b.sent();
-                        result = response.data || response;
-                        match = (Array.isArray(result) ? result[0] : result);
-                        if (match && match.identified) {
-                            return [2 /*return*/, {
-                                    success: true,
-                                    data: {
-                                        operatorId: match.id,
-                                        operatorName: match.name,
-                                        countryIso: ((_a = match.country) === null || _a === void 0 ? void 0 : _a.iso_code) || 'Unknown',
-                                        identified: true
-                                    }
-                                }];
-                        }
-                        return [2 /*return*/, { success: false, error: 'Operator not found', code: 'OPERATOR_NOT_FOUND' }];
-                    case 3:
-                        error_2 = _b.sent();
-                        err = handleApiError(error_2, 'Lookup');
-                        return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 4: return [2 /*return*/];
-                }
-            });
-        });
+    async lookupMobileNumber(mobile) {
+        const cleanMobile = formatMobileForDtOne(mobile);
+        console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
+        if (!validateMobileNumber(cleanMobile)) {
+            return { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' };
+        }
+        try {
+            const response = await dtone_1.default.postLookupMobileNumber({ mobile_number: cleanMobile });
+            const result = response.data || response;
+            const match = (Array.isArray(result) ? result[0] : result);
+            if (match && match.identified) {
+                return {
+                    success: true,
+                    data: {
+                        operatorId: match.id,
+                        operatorName: match.name,
+                        countryIso: match.country?.iso_code || 'Unknown',
+                        identified: true
+                    }
+                };
+            }
+            return { success: false, error: 'Operator not found', code: 'OPERATOR_NOT_FOUND' };
+        }
+        catch (error) {
+            const err = handleApiError(error, 'Lookup');
+            return { success: false, error: err.error, code: err.code };
+        }
     },
     // ----------------------------------------
     // C. GET PRODUCTS (UPDATED WITH MARGIN LOGIC)
     // ----------------------------------------
-    getProductsForOperator: function (operatorId_1) {
-        return __awaiter(this, arguments, void 0, function (operatorId, serviceId, perPage, lang) {
-            var page, allProducts, hasMore, response, rawList, list, products, error_3, err;
-            if (serviceId === void 0) { serviceId = 1; }
-            if (perPage === void 0) { perPage = 100; }
-            if (lang === void 0) { lang = 'en'; }
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        console.log("[DTOne] Fetching Products: Op=".concat(operatorId, ", Lang=").concat(lang));
-                        _a.label = 1;
-                    case 1:
-                        _a.trys.push([1, 5, , 6]);
-                        page = 1;
-                        allProducts = [];
-                        hasMore = true;
-                        _a.label = 2;
-                    case 2:
-                        if (!hasMore) return [3 /*break*/, 4];
-                        console.log("   ... fetching page ".concat(page));
-                        return [4 /*yield*/, dtone_1.default.getProducts({
-                                operator_id: operatorId,
-                                service_id: serviceId,
-                                page: page,
-                                per_page: perPage,
-                                'Accept-Language': lang
-                            })];
-                    case 3:
-                        response = _a.sent();
-                        rawList = response.data || response;
-                        list = (Array.isArray(rawList) ? rawList : (rawList.payload || []));
-                        if (list.length === 0) {
-                            hasMore = false;
-                        }
-                        else {
-                            allProducts = __spreadArray(__spreadArray([], allProducts, true), list, true);
-                            if (list.length < perPage)
-                                hasMore = false;
-                            else
-                                page++;
-                        }
-                        return [3 /*break*/, 2];
-                    case 4:
-                        console.log("[DTOne] \u2705 Found ".concat(allProducts.length, " total products."));
-                        products = allProducts.map(function (p) {
-                            var _a, _b, _c, _d, _e, _f, _g, _h;
-                            var dest = p.destination || {};
-                            var source = p.source || {};
-                            var prices = p.prices || {};
-                            var isRanged = ((_a = p.type) === null || _a === void 0 ? void 0 : _a.includes('RANGE')) ||
-                                (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
-                            var amount = 'N/A';
-                            var min = 0;
-                            var max = 0;
-                            if (typeof dest.amount === 'number') {
-                                amount = "".concat(dest.amount, " ").concat(dest.unit);
-                            }
-                            else if (((_b = dest.amount) === null || _b === void 0 ? void 0 : _b.min) !== undefined) {
-                                min = dest.amount.min;
-                                max = dest.amount.max || dest.amount.min;
-                                amount = "".concat(min, "-").concat(max, " ").concat(dest.unit);
-                            }
-                            var benefits = ((_c = p.benefits) === null || _c === void 0 ? void 0 : _c.map(function (b) { return b.type; })) || [];
-                            // 💰 PRICE CALCULATION LOGIC
-                            // Priority: 1. Wholesale * Margin -> 2. Source * Margin
-                            var costPrice;
-                            var costPriceMin;
-                            var costPriceMax;
-                            var costCurrency = ((_d = prices.wholesale) === null || _d === void 0 ? void 0 : _d.unit) || source.unit || 'USD';
-                            // ❌ REMOVED: Retail Price Priority
-                            // We now rely on Wholesale + Margin
-                            // 1. Use WHOLESALE Price + MARGIN
-                            if ((_e = prices.wholesale) === null || _e === void 0 ? void 0 : _e.amount) {
-                                if (typeof prices.wholesale.amount === 'number') {
-                                    // Fixed
-                                    costPrice = prices.wholesale.amount * FALLBACK_MARGIN;
-                                }
-                                else if (prices.wholesale.amount.min !== undefined) {
-                                    // Ranged
-                                    costPriceMin = prices.wholesale.amount.min * FALLBACK_MARGIN;
-                                    costPriceMax = (prices.wholesale.amount.max || prices.wholesale.amount.min) * FALLBACK_MARGIN;
-                                    costPrice = costPriceMin;
-                                }
-                            }
-                            // 2. Fallback to SOURCE Amount + MARGIN (If wholesale is missing)
-                            if (costPrice === undefined && costPriceMin === undefined) {
-                                if (typeof source.amount === 'number') {
-                                    costPrice = source.amount * FALLBACK_MARGIN;
-                                }
-                                else if (((_f = source.amount) === null || _f === void 0 ? void 0 : _f.min) !== undefined) {
-                                    costPriceMin = source.amount.min * FALLBACK_MARGIN;
-                                    costPriceMax = (source.amount.max || source.amount.min) * FALLBACK_MARGIN;
-                                    costPrice = costPriceMin;
-                                }
-                            }
-                            return {
-                                id: p.id,
-                                name: p.name,
-                                type: p.type,
-                                amount: amount,
-                                currency: dest.unit,
-                                min: min,
-                                max: max,
-                                benefits: benefits,
-                                subserviceId: (_h = (_g = p.service) === null || _g === void 0 ? void 0 : _g.subservice) === null || _h === void 0 ? void 0 : _h.id,
-                                costPrice: costPrice,
-                                costPriceMin: costPriceMin,
-                                costPriceMax: costPriceMax,
-                                costCurrency: costCurrency,
-                                isRanged: isRanged
-                            };
-                        });
-                        return [2 /*return*/, { success: true, data: products }];
-                    case 5:
-                        error_3 = _a.sent();
-                        err = handleApiError(error_3, 'Get Products');
-                        return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 6: return [2 /*return*/];
+    async getProductsForOperator(operatorId, serviceId = 1, perPage = 100, lang = 'en') {
+        console.log(`[DTOne] Fetching Products: Op=${operatorId}, Lang=${lang}`);
+        try {
+            let page = 1;
+            let allProducts = [];
+            let hasMore = true;
+            while (hasMore) {
+                console.log(`   ... fetching page ${page}`);
+                const response = await dtone_1.default.getProducts({
+                    operator_id: operatorId,
+                    service_id: serviceId,
+                    page: page,
+                    per_page: perPage,
+                    'Accept-Language': lang
+                });
+                const rawList = response.data || response;
+                const list = (Array.isArray(rawList) ? rawList : (rawList.payload || []));
+                if (list.length === 0) {
+                    hasMore = false;
                 }
+                else {
+                    allProducts = [...allProducts, ...list];
+                    if (list.length < perPage)
+                        hasMore = false;
+                    else
+                        page++;
+                }
+            }
+            console.log(`[DTOne] ✅ Found ${allProducts.length} total products.`);
+            const products = allProducts.map(p => {
+                const dest = p.destination || {};
+                const source = p.source || {};
+                const prices = p.prices || {};
+                const isRanged = p.type?.includes('RANGE') ||
+                    (dest.amount && typeof dest.amount === 'object' && dest.amount.min !== undefined);
+                let amount = 'N/A';
+                let min = 0;
+                let max = 0;
+                if (typeof dest.amount === 'number') {
+                    amount = `${dest.amount} ${dest.unit}`;
+                }
+                else if (dest.amount?.min !== undefined) {
+                    min = dest.amount.min;
+                    max = dest.amount.max || dest.amount.min;
+                    amount = `${min}-${max} ${dest.unit}`;
+                }
+                const benefits = p.benefits?.map((b) => b.type) || [];
+                // 💰 PRICE CALCULATION LOGIC
+                // Priority: 1. Wholesale * Margin -> 2. Source * Margin
+                let costPrice;
+                let costPriceMin;
+                let costPriceMax;
+                let costCurrency = prices.wholesale?.unit || source.unit || 'USD';
+                // ❌ REMOVED: Retail Price Priority
+                // We now rely on Wholesale + Margin
+                // 1. Use WHOLESALE Price + MARGIN
+                if (prices.wholesale?.amount) {
+                    if (typeof prices.wholesale.amount === 'number') {
+                        // Fixed
+                        costPrice = prices.wholesale.amount * FALLBACK_MARGIN;
+                    }
+                    else if (prices.wholesale.amount.min !== undefined) {
+                        // Ranged
+                        costPriceMin = prices.wholesale.amount.min * FALLBACK_MARGIN;
+                        costPriceMax = (prices.wholesale.amount.max || prices.wholesale.amount.min) * FALLBACK_MARGIN;
+                        costPrice = costPriceMin;
+                    }
+                }
+                // 2. Fallback to SOURCE Amount + MARGIN (If wholesale is missing)
+                if (costPrice === undefined && costPriceMin === undefined) {
+                    if (typeof source.amount === 'number') {
+                        costPrice = source.amount * FALLBACK_MARGIN;
+                    }
+                    else if (source.amount?.min !== undefined) {
+                        costPriceMin = source.amount.min * FALLBACK_MARGIN;
+                        costPriceMax = (source.amount.max || source.amount.min) * FALLBACK_MARGIN;
+                        costPrice = costPriceMin;
+                    }
+                }
+                return {
+                    id: p.id,
+                    name: p.name,
+                    type: p.type,
+                    amount,
+                    currency: dest.unit,
+                    min,
+                    max,
+                    benefits,
+                    subserviceId: p.service?.subservice?.id,
+                    costPrice,
+                    costPriceMin,
+                    costPriceMax,
+                    costCurrency,
+                    isRanged
+                };
             });
-        });
+            return { success: true, data: products };
+        }
+        catch (error) {
+            const err = handleApiError(error, 'Get Products');
+            return { success: false, error: err.error, code: err.code };
+        }
     },
     // ----------------------------------------
     // D. PURCHASE
     // ----------------------------------------
-    purchaseProduct: function (productId, mobile, amount, unit, type, callbackUrl) {
-        return __awaiter(this, void 0, void 0, function () {
-            var cleanMobile, externalId, payload, isRanged, response, data, error_4, err;
-            var _a, _b, _c, _d;
-            return __generator(this, function (_e) {
-                switch (_e.label) {
-                    case 0:
-                        cleanMobile = formatMobileForDtOne(mobile);
-                        if (!validateMobileNumber(cleanMobile)) {
-                            return [2 /*return*/, { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' }];
-                        }
-                        externalId = generateTransactionId();
-                        console.log("[DTOne] Purchasing Product ".concat(productId, " for ").concat(cleanMobile, " [Ref: ").concat(externalId, "]..."));
-                        _e.label = 1;
-                    case 1:
-                        _e.trys.push([1, 3, , 4]);
-                        payload = {
-                            external_id: externalId,
-                            product_id: productId,
-                            credit_party_identifier: { mobile_number: cleanMobile },
-                            auto_confirm: true,
-                            callback_url: callbackUrl
-                        };
-                        isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
-                        // ✅ Correct Calculation Mode for Ranged Products
-                        if (isRanged && amount > 0 && unit) {
-                            payload.calculation_mode = 'DESTINATION_AMOUNT';
-                            payload.destination = {
-                                unit_type: 'CURRENCY',
-                                unit: unit,
-                                amount: amount
-                            };
-                        }
-                        console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
-                        return [4 /*yield*/, dtone_1.default.postTransactionSync(payload)];
-                    case 2:
-                        response = _e.sent();
-                        data = (response.data || response);
-                        return [2 /*return*/, {
-                                success: true,
-                                data: {
-                                    id: data.id,
-                                    statusId: (_b = (_a = data.status) === null || _a === void 0 ? void 0 : _a.class) === null || _b === void 0 ? void 0 : _b.id,
-                                    status: ((_c = data.status) === null || _c === void 0 ? void 0 : _c.message) || data.status,
-                                    externalId: data.external_id,
-                                    message: (_d = data.status) === null || _d === void 0 ? void 0 : _d.message
-                                }
-                            }];
-                    case 3:
-                        error_4 = _e.sent();
-                        err = handleApiError(error_4, 'Transaction');
-                        return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 4: return [2 /*return*/];
+    async purchaseProduct(productId, mobile, amount, unit, type, callbackUrl) {
+        const cleanMobile = formatMobileForDtOne(mobile);
+        if (!validateMobileNumber(cleanMobile)) {
+            return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
+        }
+        const externalId = generateTransactionId();
+        console.log(`[DTOne] Purchasing Product ${productId} for ${cleanMobile} [Ref: ${externalId}]...`);
+        try {
+            const payload = {
+                external_id: externalId,
+                product_id: productId,
+                credit_party_identifier: { mobile_number: cleanMobile },
+                auto_confirm: true,
+                callback_url: callbackUrl
+            };
+            const isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
+            // ✅ Correct Calculation Mode for Ranged Products
+            if (isRanged && amount > 0 && unit) {
+                payload.calculation_mode = 'DESTINATION_AMOUNT';
+                payload.destination = {
+                    unit_type: 'CURRENCY',
+                    unit: unit,
+                    amount: amount
+                };
+            }
+            console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
+            const response = await dtone_1.default.postTransactionSync(payload);
+            const data = (response.data || response);
+            return {
+                success: true,
+                data: {
+                    id: data.id,
+                    statusId: data.status?.class?.id,
+                    status: data.status?.message || data.status,
+                    externalId: data.external_id,
+                    message: data.status?.message
                 }
-            });
-        });
+            };
+        }
+        catch (error) {
+            const err = handleApiError(error, 'Transaction');
+            return { success: false, error: err.error, code: err.code };
+        }
     },
     // ----------------------------------------
     // E. ONE-LINE TOPUP
     // ----------------------------------------
-    purchaseTopup: function (mobile_1, productId_1) {
-        return __awaiter(this, arguments, void 0, function (mobile, productId, amount) {
-            var lookup;
-            var _a;
-            if (amount === void 0) { amount = 0; }
-            return __generator(this, function (_b) {
-                switch (_b.label) {
-                    case 0:
-                        console.log("[DTOne] \uD83D\uDD04 Auto-Topup started for ".concat(mobile));
-                        return [4 /*yield*/, exports.dtoneService.lookupMobileNumber(mobile)];
-                    case 1:
-                        lookup = _b.sent();
-                        if (!lookup.success)
-                            return [2 /*return*/, lookup];
-                        console.log("[DTOne] \u27A1\uFE0F  Operator: ".concat((_a = lookup.data) === null || _a === void 0 ? void 0 : _a.operatorName));
-                        return [4 /*yield*/, exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined)];
-                    case 2: return [2 /*return*/, _b.sent()];
-                }
-            });
-        });
+    async purchaseTopup(mobile, productId, amount = 0) {
+        console.log(`[DTOne] 🔄 Auto-Topup started for ${mobile}`);
+        const lookup = await exports.dtoneService.lookupMobileNumber(mobile);
+        if (!lookup.success)
+            return lookup;
+        console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
+        return await exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined);
     },
     // ----------------------------------------
     // F. GET ALL OPERATORS
     // ----------------------------------------
-    getAllOperators: function () {
-        return __awaiter(this, arguments, void 0, function (serviceId) {
-            var page, allOperators, hasMore, response, raw, list, simplified, error_5, err;
-            if (serviceId === void 0) { serviceId = 1; }
-            return __generator(this, function (_a) {
-                switch (_a.label) {
-                    case 0:
-                        console.log("[DTOne] \uD83D\uDD04 Fetching ALL Operators (Service ".concat(serviceId, ")..."));
-                        _a.label = 1;
-                    case 1:
-                        _a.trys.push([1, 5, , 6]);
-                        page = 1;
-                        allOperators = [];
-                        hasMore = true;
-                        _a.label = 2;
-                    case 2:
-                        if (!hasMore) return [3 /*break*/, 4];
-                        return [4 /*yield*/, dtone_1.default.getOperators({
-                                service_id: serviceId,
-                                page: page,
-                                per_page: 100
-                            })];
-                    case 3:
-                        response = _a.sent();
-                        raw = response.data || response;
-                        list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || []));
-                        if (list.length === 0) {
-                            hasMore = false;
-                        }
-                        else {
-                            simplified = list.map(function (op) {
-                                var _a;
-                                return ({
-                                    id: op.id,
-                                    name: op.name,
-                                    countryCode: (_a = op.country) === null || _a === void 0 ? void 0 : _a.iso_code,
-                                    regions: op.regions
-                                });
-                            });
-                            allOperators = __spreadArray(__spreadArray([], allOperators, true), simplified, true);
-                            if (list.length < 100)
-                                hasMore = false;
-                            else
-                                page++;
-                        }
-                        return [3 /*break*/, 2];
-                    case 4:
-                        console.log("[DTOne] \u2705 Cached ".concat(allOperators.length, " operators."));
-                        return [2 /*return*/, { success: true, data: allOperators }];
-                    case 5:
-                        error_5 = _a.sent();
-                        err = handleApiError(error_5, 'Get Operators');
-                        return [2 /*return*/, { success: false, error: err.error, code: err.code }];
-                    case 6: return [2 /*return*/];
+    async getAllOperators(serviceId = 1) {
+        console.log(`[DTOne] 🔄 Fetching ALL Operators (Service ${serviceId})...`);
+        try {
+            let page = 1;
+            let allOperators = [];
+            let hasMore = true;
+            while (hasMore) {
+                const response = await dtone_1.default.getOperators({
+                    service_id: serviceId,
+                    page: page,
+                    per_page: 100
+                });
+                const raw = response.data || response;
+                const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || []));
+                if (list.length === 0) {
+                    hasMore = false;
                 }
-            });
-        });
+                else {
+                    const simplified = list.map(op => ({
+                        id: op.id,
+                        name: op.name,
+                        countryCode: op.country?.iso_code,
+                        regions: op.regions
+                    }));
+                    allOperators = [...allOperators, ...simplified];
+                    if (list.length < 100)
+                        hasMore = false;
+                    else
+                        page++;
+                }
+            }
+            console.log(`[DTOne] ✅ Cached ${allOperators.length} operators.`);
+            return { success: true, data: allOperators };
+        }
+        catch (error) {
+            const err = handleApiError(error, 'Get Operators');
+            return { success: false, error: err.error, code: err.code };
+        }
     }
 };

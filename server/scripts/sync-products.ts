@@ -10,6 +10,7 @@ console.log("🚀 Script started! If you see this, the file is running.");
 
 import dotenv from 'dotenv';
 import path from 'path';
+import fs from 'fs'; // ✅ Added fs for checkpoints
 import pLimit from 'p-limit'; 
 
 // Force load .env from the root directory
@@ -20,17 +21,40 @@ dotenv.config({ path: envPath });
 import { db } from '../db';
 import { dtoneService } from '../dtone';
 
-// ⚡ CONFIGURATION (SAFE MODE)
-const CONCURRENCY = 1;      // Process 1 operator at a time to respect limits
-const RATE_LIMIT_DELAY = 1000; // Wait 1 second between operators
-const RETRY_DELAY = 10000;   // Wait 10 seconds if we hit a 429 Error
+// ⚡ CONFIGURATION (OPTIMIZED)
+const CONCURRENCY = 5;          // ✅ Increased to 5 for faster syncing
+const RATE_LIMIT_DELAY = 1000;  // Wait 1 second between operators per worker
+const RETRY_DELAY = 10000;      // Wait 10 seconds if we hit a 429 Error
+const CHECKPOINT_FILE = path.resolve(__dirname, 'sync-checkpoint.json'); // ✅ Checkpoint file path
 
 // Helper: Sleep function
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
+// ✅ CHECKPOINT HELPERS
+function loadCheckpoint(): Set<number> {
+  try {
+    if (fs.existsSync(CHECKPOINT_FILE)) {
+      const data = fs.readFileSync(CHECKPOINT_FILE, 'utf-8');
+      const json = JSON.parse(data);
+      return new Set(json.processed || []);
+    }
+  } catch (e) {
+    console.warn("⚠️ Could not load checkpoint, starting fresh.");
+  }
+  return new Set();
+}
+
+function saveCheckpoint(processed: Set<number>) {
+  try {
+    fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify({ processed: Array.from(processed) }, null, 2));
+  } catch (e) {
+    console.error("⚠️ Failed to save checkpoint.");
+  }
+}
+
 export async function syncProducts() {
   console.log('\n==================================================');
-  console.log('📦 [Sync] Starting Product Catalog Refresh (Safe Mode)');
+  console.log('📦 [Sync] Starting Product Catalog Refresh (Optimized)');
   console.log('==================================================');
 
   // 1. Check API Key
@@ -71,14 +95,30 @@ export async function syncProducts() {
 
     console.log(`✅ Found ${opList.length} operators.`);
 
-    // 4. Process Operators (Sequential Safe Mode)
-    console.log(`🔄 Fetching products for ${opList.length} operators...`);
+    // ✅ 4. Load Checkpoint & Filter
+    const processedIds = loadCheckpoint();
+    if (processedIds.size > 0) {
+        console.log(`📂 Resuming from checkpoint: ${processedIds.size} operators already done.`);
+    }
+
+    // Filter out operators that are already in the checkpoint
+    const opsToProcess = opList.filter(op => !processedIds.has(op.id));
+
+    if (opsToProcess.length === 0) {
+        console.log('🎉 All operators already processed! Clearing checkpoint.');
+        if (fs.existsSync(CHECKPOINT_FILE)) fs.unlinkSync(CHECKPOINT_FILE);
+        return;
+    }
+
+    // 5. Process Operators (Parallel with Limit)
+    console.log(`🔄 Processing ${opsToProcess.length} remaining operators (Concurrency: ${CONCURRENCY})...`);
     
     const limit = pLimit(CONCURRENCY);
     let processedOps = 0;
     let productsSaved = 0;
+    const totalOps = opsToProcess.length;
 
-    const tasks = opList.map((op) => {
+    const tasks = opsToProcess.map((op) => {
       return limit(async () => {
         let opSuccess = false;
         let opRetries = 0;
@@ -116,7 +156,7 @@ export async function syncProducts() {
                                 minAmount: p.min,
                                 maxAmount: p.max,
                                 serviceId: p.subserviceId || 1,
-				costPrice: p.costPrice || null,
+                                costPrice: p.costPrice || null,
                                 costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,
                                 costCurrency: p.costCurrency || 'USD',
@@ -132,9 +172,8 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min || null,
                                 maxAmount: p.max || null,
-                                // ✅ NEW: Save cost price
                                 costPrice: p.costPrice || null,
-				costPriceMin: p.costPriceMin || null,
+                                costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,
                                 costCurrency: p.costCurrency || 'USD'
                             }
@@ -156,12 +195,18 @@ export async function syncProducts() {
             }
         }
 
+        // ✅ UPDATE CHECKPOINT ON SUCCESS
+        if (opSuccess) {
+            processedIds.add(op.id);
+            saveCheckpoint(processedIds);
+        }
+
         // ✅ RATE LIMITING: Always wait a bit between operators
         await sleep(RATE_LIMIT_DELAY);
 
         processedOps++;
-        if (processedOps % 5 === 0 || processedOps === opList.length) {
-            console.log(`   📝 Progress: ${processedOps}/${opList.length} operators checked. (Saved: ${productsSaved})`);
+        if (processedOps % 10 === 0 || processedOps === totalOps) {
+            console.log(`   📝 Progress: ${processedOps}/${totalOps} operators checked. (Saved: ${productsSaved})`);
         }
       });
     });
@@ -171,6 +216,13 @@ export async function syncProducts() {
     console.log(`\n\n✅ [Success] Sync Complete!`);
     console.log(`   - Operators Processed: ${processedOps}`);
     console.log(`   - Products Saved in DB: ${productsSaved}`);
+    
+    // ✅ Cleanup Checkpoint
+    if (fs.existsSync(CHECKPOINT_FILE)) {
+        fs.unlinkSync(CHECKPOINT_FILE);
+        console.log('   - Checkpoint file cleared for next run.');
+    }
+    
     console.log('==================================================\n');
 
   } catch (error: any) {
