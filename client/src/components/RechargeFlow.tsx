@@ -44,6 +44,7 @@ export default function RechargeFlow() {
     product: Product;
     mobile: string;
     customAmount?: number;
+    clientSecret?: string;
     serverPrice?: {
       usdPrice: number;
       localAmount: number;
@@ -112,9 +113,18 @@ export default function RechargeFlow() {
   // 3. Categorize
   const categorizedProducts = useMemo(() => {
     return {
-      AIRTIME: fixedProducts.filter(p => p.subserviceId !== 12 && p.subserviceId !== 13),
-      DATA: fixedProducts.filter(p => p.subserviceId === 12),
-      BUNDLES: fixedProducts.filter(p => p.subserviceId === 13),
+      // Mobile (1) -> Airtime (11)
+      AIRTIME: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 11),
+      
+      // Mobile (1) -> Bundles (12)
+      BUNDLES: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 12),
+      
+      // Mobile (1) -> Data (13)
+      DATA: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 13),
+
+      // Future Proofing:
+      // GIFT_CARDS: fixedProducts.filter(p => p.serviceId === 4),
+      // UTILITIES: fixedProducts.filter(p => p.serviceId === 3),
     };
   }, [fixedProducts]);
 
@@ -285,6 +295,7 @@ export default function RechargeFlow() {
         product,
         mobile: validationState?.fullNumber || '',
         customAmount: customAmountValue,
+        clientSecret: priceData.clientSecret,
         serverPrice: {
           usdPrice: priceData.chargeAmount,
           localAmount: priceData.localAmount,
@@ -782,6 +793,7 @@ export default function RechargeFlow() {
              <PaymentModal
                isOpen={isPayModalOpen}
                onClose={handleCloseModal} 
+               clientSecret={pendingPurchase.clientSecret}
                amount={pendingPurchase.serverPrice?.usdPrice || 0}
                currency="USD"
                onSuccess={executeTransaction} 

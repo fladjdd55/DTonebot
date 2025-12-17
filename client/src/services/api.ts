@@ -3,11 +3,12 @@ export interface Product {
   name: string;
   description?: string;
   type: string;
+  serviceId: number;      // 1=Mobile, 4=GiftCards, 3=Utilities
+  subserviceId?: number;     // 11=Airtime, 12=Bundle, 13=Data, 41=Retail...
   amount: string;
   currency: string;
   min: number;
   max: number;
-  subserviceId?: number;
   benefits: string[];
   costPrice?: number;         // Fixed cost OR min cost for ranged
   costPriceMin?: number;      // Min USD cost (for RANGED products)

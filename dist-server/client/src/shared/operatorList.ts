@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
- * Timestamp: 2025-12-17T09:57:21.605Z
+ * Timestamp: 2025-12-17T18:15:50.067Z
  * * Run 'npx ts-node server/scripts/sync-operators.ts' to update.
  */
 
@@ -499,12 +499,6 @@ export const OPERATORS: Operator[] = [
     "id": 570,
     "name": "Smart Philippines",
     "countryCode": "PHL",
-    "regions": null
-  },
-  {
-    "id": 589,
-    "name": "Starhub Singapore",
-    "countryCode": "SGP",
     "regions": null
   },
   {
@@ -2118,6 +2112,12 @@ export const OPERATORS: Operator[] = [
   {
     "id": 2000,
     "name": "Wom Chile",
+    "countryCode": "CHL",
+    "regions": null
+  },
+  {
+    "id": 2001,
+    "name": "Virgin Mobile Chile",
     "countryCode": "CHL",
     "regions": null
   },

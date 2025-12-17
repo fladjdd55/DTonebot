@@ -247,7 +247,7 @@ async function processPurchase(data, source = 'API') {
     return { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING', ...result.data, dbStatus, refunded: dbStatus === 'FAILED' };
 }
 // ==================================================================
-// 📡 DTONE WEBHOOK (FIXED: Added Null Check)
+// 📡 DTONE WEBHOOK
 // ==================================================================
 app.post('/api/hooks/dtone', express_1.default.urlencoded({ extended: true }), async (req, res) => {
     try {
@@ -277,7 +277,7 @@ app.post('/api/hooks/dtone', express_1.default.urlencoded({ extended: true }), a
                 where: { id: txn.id },
                 data: { status: newStatus, updatedAt: new Date() }
             });
-            // ✅ FIX: Check if paymentIntentId exists before refunding
+            // Check if paymentIntentId exists before refunding
             if (shouldRefund && txn.paymentIntentId) {
                 console.log(`[DTOne Webhook] Refunding ${txn.paymentIntentId}...`);
                 const refund = await payment_1.paymentService.refundPayment(txn.paymentIntentId);
@@ -348,7 +348,7 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
 });
 app.use(express_1.default.json());
 // ==================================================================
-// 🔐 AUTHENTICATION ROUTES (MISSING APIS RESTORED)
+// 🔐 AUTHENTICATION ROUTES
 // ==================================================================
 const registerSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
@@ -488,8 +488,11 @@ app.get('/api/products', async (req, res) => {
             take: limitNum,
             skip: skip
         });
-        if (localProducts.length > 0)
+        if (localProducts.length > 0) {
+            // Log for debugging
+            console.log(`[Products] Found ${localProducts.length} items in DB for Op ${opId}. Types:`, [...new Set(localProducts.map(p => p.type))].join(', '));
             return res.json(localProducts);
+        }
         console.log(`[Cache Miss] Fetching products for Op ${opId}`);
         const result = await dtone_1.dtoneService.getProductsForOperator(opId, pageNum, limitNum, 'en');
         if (!result.success || !result.data) {
@@ -550,12 +553,21 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
         }
         const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
             mobile,
-            productId: productId.toString(),
+            productId: Number(productId),
             type,
             userId: req.user?.id,
             localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
         }, idempotencyKey);
-        res.json({ ...result, isGuest: !req.user, userId: req.user?.id });
+        // ✅ FIXED: Return full price info for the frontend
+        res.json({
+            ...result,
+            isGuest: !req.user,
+            userId: req.user?.id,
+            chargeAmount: finalCharge,
+            localAmount: isRanged ? customAmount : product.amount,
+            currency: 'USD',
+            breakdown: { base: baseCostUsd, margin: FALLBACK_MARGIN, final: finalCharge }
+        });
     }
     catch (error) {
         res.status(500).json({ error: error.message });

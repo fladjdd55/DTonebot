@@ -10,7 +10,7 @@ console.log("🚀 Script started! If you see this, the file is running.");
 
 import dotenv from 'dotenv';
 import path from 'path';
-import fs from 'fs'; // ✅ Added fs for checkpoints
+import fs from 'fs';
 import pLimit from 'p-limit'; 
 
 // Force load .env from the root directory
@@ -22,10 +22,10 @@ import { db } from '../db';
 import { dtoneService } from '../dtone';
 
 // ⚡ CONFIGURATION (OPTIMIZED)
-const CONCURRENCY = 5;          // ✅ Increased to 5 for faster syncing
-const RATE_LIMIT_DELAY = 1000;  // Wait 1 second between operators per worker
-const RETRY_DELAY = 10000;      // Wait 10 seconds if we hit a 429 Error
-const CHECKPOINT_FILE = path.resolve(__dirname, 'sync-checkpoint.json'); // ✅ Checkpoint file path
+const CONCURRENCY = 1;          // Worker count
+const RATE_LIMIT_DELAY = 2000;  // 1s wait per worker
+const RETRY_DELAY = 15000;      // 10s wait on 429
+const CHECKPOINT_FILE = path.resolve(__dirname, 'sync-checkpoint.json');
 
 // Helper: Sleep function
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
@@ -54,7 +54,7 @@ function saveCheckpoint(processed: Set<number>) {
 
 export async function syncProducts() {
   console.log('\n==================================================');
-  console.log('📦 [Sync] Starting Product Catalog Refresh (Optimized)');
+  console.log('📦 [Sync] Starting Product Catalog Refresh (Architecture v2)');
   console.log('==================================================');
 
   // 1. Check API Key
@@ -74,7 +74,6 @@ export async function syncProducts() {
     // 3. Fetch Operators
     console.log('📡 Connecting to DTOne to fetch operators...');
     
-    // Simple retry for the main operator list
     let opList: any[] = [];
     let attempts = 0;
     while (attempts < 3 && opList.length === 0) {
@@ -95,13 +94,12 @@ export async function syncProducts() {
 
     console.log(`✅ Found ${opList.length} operators.`);
 
-    // ✅ 4. Load Checkpoint & Filter
+    // 4. Load Checkpoint & Filter
     const processedIds = loadCheckpoint();
     if (processedIds.size > 0) {
         console.log(`📂 Resuming from checkpoint: ${processedIds.size} operators already done.`);
     }
 
-    // Filter out operators that are already in the checkpoint
     const opsToProcess = opList.filter(op => !processedIds.has(op.id));
 
     if (opsToProcess.length === 0) {
@@ -110,13 +108,17 @@ export async function syncProducts() {
         return;
     }
 
-    // 5. Process Operators (Parallel with Limit)
+    // 5. Process Operators
     console.log(`🔄 Processing ${opsToProcess.length} remaining operators (Concurrency: ${CONCURRENCY})...`);
     
     const limit = pLimit(CONCURRENCY);
     let processedOps = 0;
     let productsSaved = 0;
     const totalOps = opsToProcess.length;
+
+    // We are fetching Service ID 1 (Mobile)
+    // If you add Gift Cards later, you'll change this or add a loop.
+    const TARGET_SERVICE_ID = 1; 
 
     const tasks = opsToProcess.map((op) => {
       return limit(async () => {
@@ -125,28 +127,26 @@ export async function syncProducts() {
 
         while (!opSuccess && opRetries < 3) {
             try {
-                // Fetch products
-                const apiRes = await dtoneService.getProductsForOperator(op.id, 1, 100, 'en');
+                // Fetch products for Service 1 (Mobile)
+                const apiRes = await dtoneService.getProductsForOperator(op.id, TARGET_SERVICE_ID, 100, 'en');
                 
-                // CASE 1: Rate Limit Hit
                 if (!apiRes.success && (apiRes.error?.includes('Too Many Requests') || apiRes.code === '429')) {
                     opRetries++;
                     console.warn(`⏳ Rate Limit Hit on Op ${op.id}. Pausing ${RETRY_DELAY/1000}s...`);
                     await sleep(RETRY_DELAY);
-                    continue; // Retry loop
+                    continue; 
                 }
 
-                // CASE 2: Other Error
                 if (!apiRes.success) {
-                    opSuccess = true; // Treat as "done" so we don't retry forever on 404s
+                    opSuccess = true; 
                     break;
                 }
 
-                // CASE 3: Success
                 if (apiRes.data && apiRes.data.length > 0) {
-                    // ✅ Handle individual writes safely
                     const upsertPromises = apiRes.data.map((p) => {
-                        const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                        const fixedAmount = p.amount && p.amount !== 'N/A' && !p.amount.includes('-') 
+                            ? parseFloat(p.amount.split(' ')[0]) 
+                            : 0;
                         
                         return db.product.upsert({
                             where: { id: p.id },
@@ -155,7 +155,9 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min,
                                 maxAmount: p.max,
-                                serviceId: p.subserviceId || 1,
+                                // ✅ NEW ARCHITECTURE: Split IDs
+                                serviceId: TARGET_SERVICE_ID,   // 1 (Mobile)
+                                subserviceId: p.subserviceId,   // 11 (Airtime), 12 (Data)...
                                 costPrice: p.costPrice || null,
                                 costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,
@@ -166,7 +168,9 @@ export async function syncProducts() {
                                 id: p.id,
                                 name: p.name,
                                 type: p.type,
-                                serviceId: p.subserviceId || 1, 
+                                // ✅ NEW ARCHITECTURE: Split IDs
+                                serviceId: TARGET_SERVICE_ID,   
+                                subserviceId: p.subserviceId,   
                                 operatorId: op.id,
                                 currency: p.currency,
                                 amount: fixedAmount,
@@ -195,13 +199,11 @@ export async function syncProducts() {
             }
         }
 
-        // ✅ UPDATE CHECKPOINT ON SUCCESS
         if (opSuccess) {
             processedIds.add(op.id);
             saveCheckpoint(processedIds);
         }
 
-        // ✅ RATE LIMITING: Always wait a bit between operators
         await sleep(RATE_LIMIT_DELAY);
 
         processedOps++;
@@ -217,18 +219,15 @@ export async function syncProducts() {
     console.log(`   - Operators Processed: ${processedOps}`);
     console.log(`   - Products Saved in DB: ${productsSaved}`);
     
-    // ✅ Cleanup Checkpoint
     if (fs.existsSync(CHECKPOINT_FILE)) {
         fs.unlinkSync(CHECKPOINT_FILE);
-        console.log('   - Checkpoint file cleared for next run.');
+        console.log('   - Checkpoint file cleared.');
     }
     
     console.log('==================================================\n');
 
   } catch (error: any) {
     console.error('\n❌ [Sync] Script Crashed:', error);
-  } finally {
-    // await db.$disconnect();
   }
 }
 

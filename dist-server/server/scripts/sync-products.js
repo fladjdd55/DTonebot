@@ -13,7 +13,7 @@ if (node_dns_1.default.setDefaultResultOrder) {
 console.log("🚀 Script started! If you see this, the file is running.");
 const dotenv_1 = __importDefault(require("dotenv"));
 const path_1 = __importDefault(require("path"));
-const fs_1 = __importDefault(require("fs")); // ✅ Added fs for checkpoints
+const fs_1 = __importDefault(require("fs"));
 const p_limit_1 = __importDefault(require("p-limit"));
 // Force load .env from the root directory
 const envPath = path_1.default.resolve(__dirname, '../../.env');
@@ -22,10 +22,10 @@ dotenv_1.default.config({ path: envPath });
 const db_1 = require("../db");
 const dtone_1 = require("../dtone");
 // ⚡ CONFIGURATION (OPTIMIZED)
-const CONCURRENCY = 5; // ✅ Increased to 5 for faster syncing
-const RATE_LIMIT_DELAY = 1000; // Wait 1 second between operators per worker
-const RETRY_DELAY = 10000; // Wait 10 seconds if we hit a 429 Error
-const CHECKPOINT_FILE = path_1.default.resolve(__dirname, 'sync-checkpoint.json'); // ✅ Checkpoint file path
+const CONCURRENCY = 5; // Worker count
+const RATE_LIMIT_DELAY = 1000; // 1s wait per worker
+const RETRY_DELAY = 10000; // 10s wait on 429
+const CHECKPOINT_FILE = path_1.default.resolve(__dirname, 'sync-checkpoint.json');
 // Helper: Sleep function
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 // ✅ CHECKPOINT HELPERS
@@ -52,7 +52,7 @@ function saveCheckpoint(processed) {
 }
 async function syncProducts() {
     console.log('\n==================================================');
-    console.log('📦 [Sync] Starting Product Catalog Refresh (Optimized)');
+    console.log('📦 [Sync] Starting Product Catalog Refresh (Architecture v2)');
     console.log('==================================================');
     // 1. Check API Key
     const key = process.env.DTONE_API_KEY;
@@ -68,7 +68,6 @@ async function syncProducts() {
         console.log(`   (Current products in DB: ${currentCount})`);
         // 3. Fetch Operators
         console.log('📡 Connecting to DTOne to fetch operators...');
-        // Simple retry for the main operator list
         let opList = [];
         let attempts = 0;
         while (attempts < 3 && opList.length === 0) {
@@ -87,12 +86,11 @@ async function syncProducts() {
             return;
         }
         console.log(`✅ Found ${opList.length} operators.`);
-        // ✅ 4. Load Checkpoint & Filter
+        // 4. Load Checkpoint & Filter
         const processedIds = loadCheckpoint();
         if (processedIds.size > 0) {
             console.log(`📂 Resuming from checkpoint: ${processedIds.size} operators already done.`);
         }
-        // Filter out operators that are already in the checkpoint
         const opsToProcess = opList.filter(op => !processedIds.has(op.id));
         if (opsToProcess.length === 0) {
             console.log('🎉 All operators already processed! Clearing checkpoint.');
@@ -100,37 +98,38 @@ async function syncProducts() {
                 fs_1.default.unlinkSync(CHECKPOINT_FILE);
             return;
         }
-        // 5. Process Operators (Parallel with Limit)
+        // 5. Process Operators
         console.log(`🔄 Processing ${opsToProcess.length} remaining operators (Concurrency: ${CONCURRENCY})...`);
         const limit = (0, p_limit_1.default)(CONCURRENCY);
         let processedOps = 0;
         let productsSaved = 0;
         const totalOps = opsToProcess.length;
+        // We are fetching Service ID 1 (Mobile)
+        // If you add Gift Cards later, you'll change this or add a loop.
+        const TARGET_SERVICE_ID = 1;
         const tasks = opsToProcess.map((op) => {
             return limit(async () => {
                 let opSuccess = false;
                 let opRetries = 0;
                 while (!opSuccess && opRetries < 3) {
                     try {
-                        // Fetch products
-                        const apiRes = await dtone_1.dtoneService.getProductsForOperator(op.id, 1, 100, 'en');
-                        // CASE 1: Rate Limit Hit
+                        // Fetch products for Service 1 (Mobile)
+                        const apiRes = await dtone_1.dtoneService.getProductsForOperator(op.id, TARGET_SERVICE_ID, 100, 'en');
                         if (!apiRes.success && (apiRes.error?.includes('Too Many Requests') || apiRes.code === '429')) {
                             opRetries++;
                             console.warn(`⏳ Rate Limit Hit on Op ${op.id}. Pausing ${RETRY_DELAY / 1000}s...`);
                             await sleep(RETRY_DELAY);
-                            continue; // Retry loop
+                            continue;
                         }
-                        // CASE 2: Other Error
                         if (!apiRes.success) {
-                            opSuccess = true; // Treat as "done" so we don't retry forever on 404s
+                            opSuccess = true;
                             break;
                         }
-                        // CASE 3: Success
                         if (apiRes.data && apiRes.data.length > 0) {
-                            // ✅ Handle individual writes safely
                             const upsertPromises = apiRes.data.map((p) => {
-                                const fixedAmount = p.amount && p.amount !== 'N/A' ? parseFloat(p.amount.split(' ')[0]) : 0;
+                                const fixedAmount = p.amount && p.amount !== 'N/A' && !p.amount.includes('-')
+                                    ? parseFloat(p.amount.split(' ')[0])
+                                    : 0;
                                 return db_1.db.product.upsert({
                                     where: { id: p.id },
                                     update: {
@@ -138,7 +137,9 @@ async function syncProducts() {
                                         amount: fixedAmount,
                                         minAmount: p.min,
                                         maxAmount: p.max,
-                                        serviceId: p.subserviceId || 1,
+                                        // ✅ NEW ARCHITECTURE: Split IDs
+                                        serviceId: TARGET_SERVICE_ID, // 1 (Mobile)
+                                        subserviceId: p.subserviceId, // 11 (Airtime), 12 (Data)...
                                         costPrice: p.costPrice || null,
                                         costPriceMin: p.costPriceMin || null,
                                         costPriceMax: p.costPriceMax || null,
@@ -149,7 +150,9 @@ async function syncProducts() {
                                         id: p.id,
                                         name: p.name,
                                         type: p.type,
-                                        serviceId: p.subserviceId || 1,
+                                        // ✅ NEW ARCHITECTURE: Split IDs
+                                        serviceId: TARGET_SERVICE_ID,
+                                        subserviceId: p.subserviceId,
                                         operatorId: op.id,
                                         currency: p.currency,
                                         amount: fixedAmount,
@@ -175,12 +178,10 @@ async function syncProducts() {
                         opSuccess = true;
                     }
                 }
-                // ✅ UPDATE CHECKPOINT ON SUCCESS
                 if (opSuccess) {
                     processedIds.add(op.id);
                     saveCheckpoint(processedIds);
                 }
-                // ✅ RATE LIMITING: Always wait a bit between operators
                 await sleep(RATE_LIMIT_DELAY);
                 processedOps++;
                 if (processedOps % 10 === 0 || processedOps === totalOps) {
@@ -192,18 +193,14 @@ async function syncProducts() {
         console.log(`\n\n✅ [Success] Sync Complete!`);
         console.log(`   - Operators Processed: ${processedOps}`);
         console.log(`   - Products Saved in DB: ${productsSaved}`);
-        // ✅ Cleanup Checkpoint
         if (fs_1.default.existsSync(CHECKPOINT_FILE)) {
             fs_1.default.unlinkSync(CHECKPOINT_FILE);
-            console.log('   - Checkpoint file cleared for next run.');
+            console.log('   - Checkpoint file cleared.');
         }
         console.log('==================================================\n');
     }
     catch (error) {
         console.error('\n❌ [Sync] Script Crashed:', error);
-    }
-    finally {
-        // await db.$disconnect();
     }
 }
 if (require.main === module) {

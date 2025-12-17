@@ -274,7 +274,7 @@ async function processPurchase(
 }
 
 // ==================================================================
-// 📡 DTONE WEBHOOK (FIXED: Added Null Check)
+// 📡 DTONE WEBHOOK
 // ==================================================================
 app.post('/api/hooks/dtone', 
   express.urlencoded({ extended: true }), 
@@ -311,7 +311,7 @@ app.post('/api/hooks/dtone',
           data: { status: newStatus, updatedAt: new Date() }
         });
 
-        // ✅ FIX: Check if paymentIntentId exists before refunding
+        // Check if paymentIntentId exists before refunding
         if (shouldRefund && txn.paymentIntentId) {
           console.log(`[DTOne Webhook] Refunding ${txn.paymentIntentId}...`);
           const refund = await paymentService.refundPayment(txn.paymentIntentId);
@@ -387,7 +387,7 @@ app.post('/api/hooks/stripe',
 app.use(express.json());
 
 // ==================================================================
-// 🔐 AUTHENTICATION ROUTES (MISSING APIS RESTORED)
+// 🔐 AUTHENTICATION ROUTES
 // ==================================================================
 
 const registerSchema = z.object({
@@ -553,7 +553,13 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
       skip: skip       
     });
 
-    if (localProducts.length > 0) return res.json(localProducts);
+    if (localProducts.length > 0) {
+      // Log for debugging
+      console.log(`[Products] Found ${localProducts.length} items in DB for Op ${opId}. Types:`, 
+        [...new Set(localProducts.map(p => p.type))].join(', ')
+      );
+      return res.json(localProducts);
+    }
 
     console.log(`[Cache Miss] Fetching products for Op ${opId}`);
     const result = await dtoneService.getProductsForOperator(opId, pageNum, limitNum, 'en');
@@ -624,7 +630,7 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
       'USD', 
       { 
         mobile, 
-        productId: productId.toString(), 
+        productId: Number(productId), 
         type,
         userId: req.user?.id,
         localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
@@ -632,7 +638,16 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
       idempotencyKey 
     );
 
-    res.json({ ...result, isGuest: !req.user, userId: req.user?.id });
+    // ✅ FIXED: Return full price info for the frontend
+    res.json({ 
+        ...result, 
+        isGuest: !req.user, 
+        userId: req.user?.id,
+        chargeAmount: finalCharge, 
+        localAmount: isRanged ? customAmount : product.amount,
+        currency: 'USD',
+        breakdown: { base: baseCostUsd, margin: FALLBACK_MARGIN, final: finalCharge }
+    });
     
   } catch (error: any) {
     res.status(500).json({ error: error.message });
