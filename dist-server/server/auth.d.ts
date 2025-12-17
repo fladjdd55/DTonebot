@@ -10,10 +10,18 @@ export interface AuthResult {
     refreshToken?: string;
     error?: string;
 }
+interface DeviceInfo {
+    ip: string;
+    userAgent: string;
+    fingerprint?: string;
+}
 export declare const authService: {
-    register(email: string, password: string, name?: string): Promise<AuthResult>;
-    login(email: string, password: string): Promise<AuthResult>;
-    refreshToken(token: string): Promise<AuthResult>;
+    register(email: string, password: string, name?: string, device?: DeviceInfo): Promise<AuthResult>;
+    login(email: string, password: string, device?: DeviceInfo): Promise<AuthResult>;
+    /**
+     * FIXED: Token rotation with rollback on failure
+     */
+    refreshToken(token: string, device: DeviceInfo): Promise<AuthResult>;
     revokeToken(token: string): Promise<{
         success: boolean;
     }>;
@@ -22,4 +30,9 @@ export declare const authService: {
         phone?: string;
     }): Promise<AuthResult>;
     changePassword(userId: string, current: string, newPass: string): Promise<AuthResult>;
+    /**
+     * Clean up expired tokens (run daily via cron)
+     */
+    cleanupExpiredTokens(): Promise<number>;
 };
+export {};

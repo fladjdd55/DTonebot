@@ -1,4 +1,9 @@
-// prisma/schema.prisma
+// prisma/schema.prisma - FIXED VERSION
+// Key Changes:
+// 1. Added critical indexes for performance
+// 2. Added soft delete support
+// 3. Better constraints
+// 4. Webhook deduplication table
 
 generator client {
   provider = "prisma-client-js"
@@ -10,25 +15,33 @@ datasource db {
 }
 
 // ==================================================================
-// USER MODEL (Updated)
+// USER MODEL (Enhanced with soft delete)
 // ==================================================================
 model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
+  id           String    @id @default(cuid())
+  email        String    @unique
   passwordHash String
   name         String?
   phone        String?
   
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  // Soft delete support
+  deletedAt    DateTime?
+  
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
   
   // Relations
   transactions  Transaction[]
-  refreshTokens RefreshToken[] // ✅ ADD THIS LINE (Fixes the error)
+  refreshTokens RefreshToken[]
+  
+  // ✅ NEW: Performance indexes
+  @@index([email])
+  @@index([deletedAt]) // For filtering active users
+  @@map("users")
 }
 
 // ==================================================================
-// TRANSACTION MODEL
+// TRANSACTION MODEL (Enhanced with indexes)
 // ==================================================================
 model Transaction {
   id              Int      @id @default(autoincrement())
@@ -43,17 +56,26 @@ model Transaction {
   productType     String?
 
   status          String   @default("PENDING")
-  processedVia    String?
+  processedVia    String?  // 'API' or 'WEBHOOK'
   
+  // User relation (nullable for guest purchases)
   userId          String?
-  user            User?    @relation(fields: [userId], references: [id])
+  user            User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+  
+  // ✅ NEW: Critical indexes for performance
+  @@index([userId, createdAt(sort: Desc)]) // User transaction history
+  @@index([status]) // Status queries
+  @@index([paymentIntentId]) // Webhook lookups
+  @@index([externalId]) // DTOne reference
+  @@index([createdAt(sort: Desc)]) // Recent transactions
+  @@map("transactions")
 }
 
 // ==================================================================
-// PRODUCT MODEL
+// PRODUCT MODEL (Enhanced with indexes)
 // ==================================================================
 model Product {
   id            Int      @id
@@ -67,6 +89,7 @@ model Product {
   minAmount     Float?
   maxAmount     Float?
   
+  // Pricing (wholesale cost + margin)
   costPrice     Float?
   costPriceMin  Float?
   costPriceMax  Float?
@@ -74,17 +97,76 @@ model Product {
   
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  
+  // ✅ NEW: Indexes for filtering
+  @@index([operatorId]) // Filter by operator
+  @@index([currency]) // Filter by currency
+  @@index([type]) // Filter by type (RANGED, etc.)
+  @@index([operatorId, currency]) // Combined filter
+  @@map("products")
 }
 
 // ==================================================================
-// REFRESH TOKEN MODEL (New)
+// REFRESH TOKEN MODEL (Enhanced with indexes)
 // ==================================================================
 model RefreshToken {
   id        String   @id @default(uuid())
-  token     String   @unique
+  token     String   @unique // Encrypted at rest
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   revoked   Boolean  @default(false)
   createdAt DateTime @default(now())
+  
+  // ✅ NEW: Indexes for cleanup and lookups
+  @@index([userId]) // User's tokens
+  @@index([expiresAt]) // Cleanup expired
+  @@index([revoked]) // Filter active tokens
+  @@map("refresh_tokens")
+}
+
+// ==================================================================
+// ✅ NEW: WEBHOOK DEDUPLICATION TABLE
+// ==================================================================
+model WebhookEvent {
+  id          String   @id @default(uuid())
+  eventId     String   @unique // Stripe event ID
+  eventType   String   // payment_intent.succeeded, etc.
+  processed   Boolean  @default(false)
+  processedAt DateTime?
+  payload     Json?    // Store full payload for debugging
+  createdAt   DateTime @default(now())
+  
+  @@index([eventId]) // Quick lookup
+  @@index([processed, createdAt]) // Cleanup
+  @@map("webhook_events")
+}
+
+// ==================================================================
+// ✅ NEW: RATE LIMITING TABLE (Alternative to Redis)
+// ==================================================================
+model RateLimit {
+  id        String   @id @default(uuid())
+  key       String   @unique // "login:userId" or "refresh:userId"
+  count     Int      @default(1)
+  expiresAt DateTime
+  
+  @@index([key, expiresAt]) // Lookup and cleanup
+  @@map("rate_limits")
+}
+
+// ==================================================================
+// ✅ NEW: ADMIN AUDIT LOG
+// ==================================================================
+model AuditLog {
+  id        String   @id @default(uuid())
+  action    String   // "refund_issued", "transaction_completed"
+  userId    String?
+  metadata  Json?    // Flexible data storage
+  ipAddress String?
+  createdAt DateTime @default(now())
+  
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([action])
+  @@map("audit_logs")
 }
