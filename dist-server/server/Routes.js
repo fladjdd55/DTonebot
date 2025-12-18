@@ -553,14 +553,19 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
             userId: req.user?.id,
             localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
         }, idempotencyKey);
+        // 1. If Ranged/Custom, use the customAmount directly.
+        // 2. If Fixed, use parseFloat() to strip "SGD" from "21 SGD" so we just get 21.
+        const displayAmount = (isRanged && customAmount)
+            ? customAmount
+            : parseFloat(product.amount || '0');
         // ✅ FIXED: Return full price info for the frontend
         res.json({
             ...result,
             isGuest: !req.user,
             userId: req.user?.id,
             chargeAmount: finalCharge,
-            localAmount: isRanged ? customAmount : product.amount,
-            currency: 'USD',
+            localAmount: displayAmount,
+            currency: product.currency,
             breakdown: { base: baseCostUsd, margin: FALLBACK_MARGIN, final: finalCharge }
         });
     }
