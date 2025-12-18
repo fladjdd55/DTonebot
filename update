@@ -1,0 +1,18 @@
+The "Monolithic" Route File
+
+Your server/Routes.ts is now over 500 lines long. It handles everything: Authentication, Payments, Webhooks, and Products.
+
+The Future Risk: If you add a new feature (e.g., "Referral System"), adding another 50 lines to this file will make it very hard to read and debug. You might accidentally break the Payment logic while editing the Auth logic.
+
+Future Solution: Split your routes into separate files.
+
+    server/routes/auth.ts (Login/Register)
+
+    server/routes/payment.ts (Stripe/Purchase)
+
+    server/routes/products.ts (Catalog) Then your main file just becomes a list of imports:
+
+TypeScript
+
+app.use('/api/auth', authRoutes);
+app.use('/api/payment', paymentRoutes);
