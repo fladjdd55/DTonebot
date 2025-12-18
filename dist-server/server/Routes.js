@@ -547,18 +547,34 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
         if (finalCharge < GLOBAL_MIN_USD) {
             return res.status(400).json({ error: `Minimum order is $${GLOBAL_MIN_USD} USD` });
         }
+        // 1. Create Stripe Intent (NO MOBILE IN METADATA)
         const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
             productId: Number(productId),
             type,
             userId: req.user?.id,
+            // ✅ STRIPE METADATA MUST BE STRINGS:
             localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
         }, idempotencyKey);
-        // 1. If Ranged/Custom, use the customAmount directly.
-        // 2. If Fixed, use parseFloat() to strip "SGD" from "21 SGD" so we just get 21.
+        // 2. ✅ CRITICAL MISSING STEP: Save Transaction immediately as "INITIALIZED"
+        // This securely links the Payment ID to the Mobile Number in YOUR database.
+        await db_1.db.transaction.create({
+            data: {
+                externalId: `init_${result.id}`, // Use Stripe ID
+                paymentIntentId: result.id,
+                mobile, // ✅ Saved SECURELY here
+                productId: Number(productId),
+                amount: finalCharge,
+                currency: 'USD',
+                productType: type || 'UNKNOWN',
+                status: 'INITIALIZED', // New temporary status
+                userId: req.user?.id
+            }
+        });
+        // 3. Prepare NUMBER for Frontend (Clean display)
         const displayAmount = (isRanged && customAmount)
             ? customAmount
-            : parseFloat(product.amount || '0');
-        // ✅ FIXED: Return full price info for the frontend
+            : (product.amount || 0);
+        // 4. Send Response
         res.json({
             ...result,
             isGuest: !req.user,
@@ -570,6 +586,11 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
         });
     }
     catch (error) {
+        // Check for unique constraint (Idempotency)
+        if (error.code === 'P2002') {
+            return res.status(409).json({ error: "Duplicate request processed" });
+        }
+        console.error("Payment Intent Error:", error);
         res.status(500).json({ error: error.message });
     }
 });

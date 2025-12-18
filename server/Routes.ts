@@ -596,8 +596,9 @@ app.post('/api/lookup', async (req: Request, res: Response): Promise<any> => {
 app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: Response): Promise<any> => {
   const { mobile, productId, type, customAmount } = req.body; 
   const idempotencyKey = req.headers['idempotency-key'] as string;
+  
   if (!idempotencyKey) {
-  return res.status(400).json({ error: "Missing Idempotency-Key header" });
+    return res.status(400).json({ error: "Missing Idempotency-Key header" });
   }
 
   if (!productId) return res.status(400).json({ error: 'Product ID required' });
@@ -631,6 +632,7 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
        return res.status(400).json({ error: `Minimum order is $${GLOBAL_MIN_USD} USD` });
     }
 
+    // 1. Create Stripe Intent (NO MOBILE IN METADATA)
     const result = await paymentService.createPaymentIntent(
       finalCharge, 
       'USD', 
@@ -638,17 +640,34 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
         productId: Number(productId), 
         type,
         userId: req.user?.id,
+        // ✅ STRIPE METADATA MUST BE STRINGS:
         localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
       },
       idempotencyKey 
     );
-    // 1. If Ranged/Custom, use the customAmount directly.
-    // 2. If Fixed, use parseFloat() to strip "SGD" from "21 SGD" so we just get 21.
+
+    // 2. ✅ CRITICAL MISSING STEP: Save Transaction immediately as "INITIALIZED"
+    // This securely links the Payment ID to the Mobile Number in YOUR database.
+    await db.transaction.create({
+      data: {
+        externalId: `init_${result.id}`, // Use Stripe ID
+        paymentIntentId: result.id,
+        mobile, // ✅ Saved SECURELY here
+        productId: Number(productId),
+        amount: finalCharge,
+        currency: 'USD',
+        productType: type || 'UNKNOWN',
+        status: 'INITIALIZED', // New temporary status
+        userId: req.user?.id
+      }
+    });
+
+    // 3. Prepare NUMBER for Frontend (Clean display)
     const displayAmount = (isRanged && customAmount)
       ? customAmount
-      : parseFloat(product.amount || '0');
+      : (product.amount || 0);
 
-    // ✅ FIXED: Return full price info for the frontend
+    // 4. Send Response
     res.json({ 
         ...result, 
         isGuest: !req.user, 
@@ -660,6 +679,11 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
     });
     
   } catch (error: any) {
+    // Check for unique constraint (Idempotency)
+    if (error.code === 'P2002') {
+       return res.status(409).json({ error: "Duplicate request processed" });
+    }
+    console.error("Payment Intent Error:", error);
     res.status(500).json({ error: error.message });
   }
 });
