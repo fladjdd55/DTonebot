@@ -40,11 +40,11 @@ exports.priceVerificationService = {
         try {
             let product = await db_1.db.product.findUnique({ where: { id: productId } });
             if (!product) {
-                console.log(`[Price Check] Product ${productId} not in cache.`);
+                console.error(`[Price Check] 🚨 BLOCKED: Product ${productId} not found in DB.`);
                 return {
-                    valid: true,
-                    error: 'Product not in cache - price verification skipped',
-                    code: 'CACHE_MISS'
+                    valid: false, // ✅ Block the transaction
+                    error: 'Product not found. Transaction blocked for security.',
+                    code: 'PRODUCT_NOT_FOUND' // ✅ Changed code so Routes.ts won't whitelist it
                 };
             }
             // ✅ FIX: Enforce USD Payment Currency (since we charge in USD)

@@ -12,6 +12,7 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const helmet_1 = __importDefault(require("helmet"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const zod_1 = require("zod");
+const redis_1 = require("./services/redis");
 // Middleware
 const auth_1 = require("./middleware/auth");
 // Services
@@ -24,6 +25,7 @@ const auth_2 = require("./auth");
 const priceVerification_1 = require("./priceVerification");
 const db_1 = require("./db");
 const app = (0, express_1.default)();
+const redis = (0, redis_1.getRedis)();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
@@ -109,10 +111,17 @@ const isValidOrigin = (origin) => {
 };
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
-        if (!origin || isValidOrigin(origin))
+        // 1. Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) {
             return callback(null, true);
+        }
+        // 2. Validate the origin against allowed list
+        if (isValidOrigin(origin)) {
+            return callback(null, true);
+        }
+        // 3. Log and Block mismatch
         console.warn(`🚫 CORS Blocked: ${origin}`);
-        callback(new Error(`CORS policy: Origin ${origin} is not allowed`));
+        callback(new Error('CORS policy: Origin not allowed'));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -133,180 +142,141 @@ const authLimiter = (0, express_rate_limit_1.default)({
     message: { error: "Too many login attempts. Please try again later." }
 });
 app.use('/api/', apiLimiter);
-// Deduplication
-const processedWebhooks = new Set();
 // ==================================================================
-// 🧩 UNIFIED PURCHASE LOGIC
+// 🧩 UNIFIED PURCHASE LOGIC (WITH REDIS LOCK)
 // ==================================================================
 async function processPurchase(data, source = 'API') {
     const { paymentId, mobile, productId, amount, currency, type, userId } = data;
-    // 1. Check existing
-    const existing = await db_1.db.transaction.findUnique({
-        where: { paymentIntentId: paymentId }
-    });
-    if (existing) {
-        if (existing.status === 'COMPLETED') {
-            return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
-        }
-        if (['REFUNDED', 'FAILED'].includes(existing.status)) {
-            return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
-        }
-        if (existing.status === 'PENDING') {
-            const ageMs = Date.now() - new Date(existing.createdAt).getTime();
-            if (ageMs < 60000) {
-                console.log(`[Purchase] ⏭️ Already processing: ${paymentId}`);
+    const lockKey = `lock:purchase:${paymentId}`;
+    // 1. 🔒 ACQUIRE LOCK (10 seconds TTL)
+    // 'NX' = Only set if not exists
+    const isLocked = await redis.set(lockKey, '1', 'EX', 10, 'NX');
+    if (!isLocked) {
+        console.log(`[Purchase] ⏳ Blocked by Redis Lock: ${paymentId}`);
+        // Return PENDING so the frontend keeps waiting/polling
+        return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
+    }
+    try {
+        // 2. Check Existing (Safe now because we have the lock)
+        const existing = await db_1.db.transaction.findUnique({
+            where: { paymentIntentId: paymentId }
+        });
+        let mobileToUse = data.mobile;
+        if (existing) {
+            if (existing.status === 'INITIALIZED') {
+                // Great! We found the secure record. Use the stored mobile number.
+                mobileToUse = existing.mobile;
+                console.log(`[Purchase] 🔄 Resuming INITIALIZED transaction for ${mobileToUse}`);
+            }
+            else if (existing.status === 'COMPLETED') {
+                return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
+            }
+            else if (['REFUNDED', 'FAILED'].includes(existing.status)) {
+                return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
+            }
+            else if (existing.status === 'PENDING') {
                 return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
             }
         }
-    }
-    // 2. Lock / Create Transaction
-    if (!existing) {
-        try {
-            await db_1.db.transaction.create({
-                data: {
-                    externalId: `pending_${paymentId}`,
-                    paymentIntentId: paymentId,
-                    paymentId: paymentId,
-                    mobile,
-                    productId,
-                    amount,
-                    currency,
-                    productType: type,
-                    status: 'PENDING',
-                    processedVia: source,
-                    userId: userId || null
-                }
-            });
-            console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
+        // 🚨 FAIL SAFE: We must have a mobile number
+        if (!mobileToUse) {
+            console.error(`[Purchase] ❌ FATAL: No mobile number found for ${data.paymentId}`);
+            // Cannot fulfill without mobile
+            return { success: false, error: "Mobile number missing" };
         }
-        catch (err) {
-            if (err.code === 'P2002') {
-                const check = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
-                return { success: check?.status === 'COMPLETED', dbStatus: check?.status, alreadyProcessed: true };
+        // 3. Create Transaction
+        // (We still keep the P2002 catch just in case, but Redis makes it 99.9% redundant)
+        if (!existing) {
+            try {
+                await db_1.db.transaction.create({
+                    data: {
+                        externalId: `pending_${paymentId}`,
+                        paymentIntentId: paymentId,
+                        paymentId: paymentId,
+                        mobile: mobileToUse,
+                        productId,
+                        amount,
+                        currency,
+                        productType: type,
+                        status: 'PENDING',
+                        processedVia: source,
+                        userId: userId || null
+                    }
+                });
+                console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
             }
-            throw err;
+            catch (err) {
+                if (err.code === 'P2002') {
+                    const check = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
+                    return { success: check?.status === 'COMPLETED', dbStatus: check?.status, alreadyProcessed: true };
+                }
+                throw err;
+            }
         }
-    }
-    // 3. Call DTOne API
-    const callbackUrl = process.env.DTONE_CALLBACK_URL
-        ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
-        : undefined;
-    const result = await dtone_1.dtoneService.purchaseProduct(productId, mobile, amount, currency, type, callbackUrl);
-    // 4. Handle Immediate Failure
-    if (!result.success || !result.data) {
-        console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
-        const refund = await payment_1.paymentService.refundPayment(paymentId);
+        // 4. Call DTOne API
+        const callbackUrl = process.env.DTONE_CALLBACK_URL
+            ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
+            : undefined;
+        const result = await dtone_1.dtoneService.purchaseProduct(productId, mobileToUse, amount, currency, type, callbackUrl);
+        // 5. Handle Immediate Failure
+        if (!result.success || !result.data) {
+            console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
+            const refund = await payment_1.paymentService.refundPayment(paymentId);
+            await db_1.db.transaction.update({
+                where: { paymentIntentId: paymentId },
+                data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED', externalId: `failed_${paymentId}` }
+            });
+            // Audit Log
+            try {
+                await db_1.db.auditLog.create({
+                    data: {
+                        action: 'PURCHASE_FAILED',
+                        userId: userId,
+                        metadata: { paymentId, error: result.error, refundId: refund?.id }
+                    }
+                });
+            }
+            catch (e) {
+                console.error("Audit Log failed", e);
+            }
+            return { success: false, error: result.error, code: result.code, refunded: !!refund };
+        }
+        // 6. Handle Pending/Success
+        const statusId = result.data.statusId;
+        let dbStatus = 'PENDING';
+        if (statusId === 7) {
+            dbStatus = 'COMPLETED';
+            console.log(`[Purchase] ✅ Success! DTOne Ref: ${result.data.externalId}`);
+        }
+        else if ([3, 9].includes(statusId || 0)) {
+            console.warn(`[Purchase] ⚠️ Declined (Status ${statusId}). Refunding...`);
+            const refund = await payment_1.paymentService.refundPayment(paymentId);
+            dbStatus = 'FAILED';
+            try {
+                await db_1.db.auditLog.create({
+                    data: {
+                        action: 'PURCHASE_DECLINED',
+                        userId: userId,
+                        metadata: { paymentId, statusId, refundId: refund?.id }
+                    }
+                });
+            }
+            catch (e) { }
+        }
+        else {
+            console.log(`[Purchase] ⏳ Submitted (Status ${statusId}). Awaiting callback.`);
+        }
         await db_1.db.transaction.update({
             where: { paymentIntentId: paymentId },
-            data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED', externalId: `failed_${paymentId}` }
+            data: { status: dbStatus, externalId: result.data.externalId }
         });
-        // Audit Log
-        try {
-            await db_1.db.auditLog.create({
-                data: {
-                    action: 'PURCHASE_FAILED',
-                    userId: userId,
-                    metadata: { paymentId, error: result.error, refundId: refund?.id }
-                }
-            });
-        }
-        catch (e) {
-            console.error("Audit Log failed", e);
-        }
-        return { success: false, error: result.error, code: result.code, refunded: !!refund };
+        return { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING', ...result.data, dbStatus, refunded: dbStatus === 'FAILED' };
     }
-    // 5. Handle Pending/Success
-    const statusId = result.data.statusId;
-    let dbStatus = 'PENDING';
-    if (statusId === 7) {
-        dbStatus = 'COMPLETED';
-        console.log(`[Purchase] ✅ Success! DTOne Ref: ${result.data.externalId}`);
+    finally {
+        // 🔓 RELEASE LOCK
+        await redis.del(lockKey);
     }
-    else if ([3, 9].includes(statusId || 0)) {
-        console.warn(`[Purchase] ⚠️ Declined (Status ${statusId}). Refunding...`);
-        const refund = await payment_1.paymentService.refundPayment(paymentId);
-        dbStatus = 'FAILED';
-        try {
-            await db_1.db.auditLog.create({
-                data: {
-                    action: 'PURCHASE_DECLINED',
-                    userId: userId,
-                    metadata: { paymentId, statusId, refundId: refund?.id }
-                }
-            });
-        }
-        catch (e) { }
-    }
-    else {
-        console.log(`[Purchase] ⏳ Submitted (Status ${statusId}). Awaiting callback.`);
-    }
-    await db_1.db.transaction.update({
-        where: { paymentIntentId: paymentId },
-        data: { status: dbStatus, externalId: result.data.externalId }
-    });
-    return { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING', ...result.data, dbStatus, refunded: dbStatus === 'FAILED' };
 }
-// ==================================================================
-// 📡 DTONE WEBHOOK
-// ==================================================================
-app.post('/api/hooks/dtone', express_1.default.urlencoded({ extended: true }), async (req, res) => {
-    try {
-        const { transaction_id, status, status_message } = req.body;
-        console.log(`[DTOne Webhook] Update for ${transaction_id}: ${status} (${status_message})`);
-        if (!transaction_id)
-            return res.status(400).send('Missing transaction_id');
-        const txn = await db_1.db.transaction.findFirst({
-            where: { externalId: transaction_id.toString() }
-        });
-        if (!txn)
-            return res.status(200).send('OK');
-        if (['COMPLETED', 'REFUNDED'].includes(txn.status)) {
-            return res.status(200).send('Already final');
-        }
-        const statusId = parseInt(status);
-        let newStatus = txn.status;
-        let shouldRefund = false;
-        if (statusId === 7)
-            newStatus = 'COMPLETED';
-        else if ([3, 9].includes(statusId)) {
-            newStatus = 'FAILED';
-            shouldRefund = true;
-        }
-        if (newStatus !== txn.status) {
-            await db_1.db.transaction.update({
-                where: { id: txn.id },
-                data: { status: newStatus, updatedAt: new Date() }
-            });
-            // Check if paymentIntentId exists before refunding
-            if (shouldRefund && txn.paymentIntentId) {
-                console.log(`[DTOne Webhook] Refunding ${txn.paymentIntentId}...`);
-                const refund = await payment_1.paymentService.refundPayment(txn.paymentIntentId);
-                await db_1.db.transaction.update({
-                    where: { id: txn.id },
-                    data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED' }
-                });
-                try {
-                    await db_1.db.auditLog.create({
-                        data: {
-                            action: 'ASYNC_REFUND',
-                            userId: txn.userId,
-                            metadata: { reason: status_message, dtoneId: transaction_id }
-                        }
-                    });
-                }
-                catch (e) { }
-            }
-            else if (shouldRefund && !txn.paymentIntentId) {
-                console.warn(`[DTOne Webhook] Cannot refund Txn ${txn.id}: No Payment ID found.`);
-            }
-        }
-        res.status(200).send('OK');
-    }
-    catch (error) {
-        console.error('[DTOne Webhook] Error:', error);
-        res.status(500).send('Error');
-    }
-});
 // ==================================================================
 // STRIPE WEBHOOK
 // ==================================================================
@@ -322,13 +292,27 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
     catch (err) {
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-    if (processedWebhooks.has(event.id))
+    // ✅ FIX: Use Database for Idempotency
+    const existingEvent = await db_1.db.webhookEvent.findUnique({
+        where: { eventId: event.id }
+    });
+    if (existingEvent) {
+        console.log(`[Stripe Webhook] ⏭️ Skipping duplicate event: ${event.id}`);
         return res.json({ received: true });
-    processedWebhooks.add(event.id);
-    setTimeout(() => processedWebhooks.delete(event.id), 24 * 60 * 60 * 1000);
+    }
+    // 🔒 Log the event immediately to "lock" it
+    await db_1.db.webhookEvent.create({
+        data: {
+            eventId: event.id,
+            eventType: event.type,
+            payload: event.data.object, // Save payload for debugging
+            processed: false
+        }
+    });
     try {
         if (event.type === 'payment_intent.succeeded') {
             const paymentIntent = event.data.object;
+            console.log(`[Stripe Webhook] 💰 Processing Payment: ${paymentIntent.id}`);
             await processPurchase({
                 paymentId: paymentIntent.id,
                 mobile: paymentIntent.metadata.mobile,
@@ -339,14 +323,20 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                 userId: paymentIntent.metadata.userId || undefined
             }, 'WEBHOOK');
         }
+        // ✅ Mark as successfully processed
+        await db_1.db.webhookEvent.update({
+            where: { eventId: event.id },
+            data: { processed: true, processedAt: new Date() }
+        });
         res.json({ received: true });
     }
     catch (error) {
         console.error('Webhook handler failed:', error);
+        // Note: We do NOT mark as processed here, so Stripe retries later if it was a temporary error.
         res.status(500).send('Webhook handler failed');
     }
 });
-app.use(express_1.default.json());
+app.use(express_1.default.json({ limit: '1mb' }));
 // ==================================================================
 // 🔐 AUTHENTICATION ROUTES
 // ==================================================================
@@ -359,10 +349,16 @@ const loginSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(1)
 });
+// ✅ HELPER: Extract Device Info
+const getDeviceInfo = (req) => ({
+    ip: req.ip || req.socket.remoteAddress || 'unknown',
+    userAgent: req.headers['user-agent'] || 'unknown'
+});
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
         const { email, password, name } = registerSchema.parse(req.body);
-        const result = await auth_2.authService.register(email, password, name);
+        // ✅ PASS DEVICE INFO
+        const result = await auth_2.authService.register(email, password, name, getDeviceInfo(req));
         if (!result.success)
             return res.status(400).json({ error: result.error });
         res.cookie('refresh_token', result.refreshToken, {
@@ -381,7 +377,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = loginSchema.parse(req.body);
-        const result = await auth_2.authService.login(email, password);
+        // ✅ PASS DEVICE INFO
+        const result = await auth_2.authService.login(email, password, getDeviceInfo(req));
         if (!result.success)
             return res.status(401).json({ error: result.error });
         res.cookie('refresh_token', result.refreshToken, {
@@ -401,12 +398,8 @@ app.post('/api/auth/refresh', async (req, res) => {
     const refreshToken = req.cookies.refresh_token;
     if (!refreshToken)
         return res.sendStatus(401);
-    // Simple Device Info extraction
-    const deviceInfo = {
-        ip: req.ip || 'unknown',
-        userAgent: req.headers['user-agent'] || 'unknown'
-    };
-    const result = await auth_2.authService.refreshToken(refreshToken, deviceInfo);
+    // ✅ USE HELPER FOR CONSISTENCY
+    const result = await auth_2.authService.refreshToken(refreshToken, getDeviceInfo(req));
     if (!result.success) {
         res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
         return res.status(403).json({ error: 'Session expired' });
@@ -524,6 +517,9 @@ app.post('/api/lookup', async (req, res) => {
 app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
     const { mobile, productId, type, customAmount } = req.body;
     const idempotencyKey = req.headers['idempotency-key'];
+    if (!idempotencyKey) {
+        return res.status(400).json({ error: "Missing Idempotency-Key header" });
+    }
     if (!productId)
         return res.status(400).json({ error: 'Product ID required' });
     try {
@@ -552,7 +548,6 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
             return res.status(400).json({ error: `Minimum order is $${GLOBAL_MIN_USD} USD` });
         }
         const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
-            mobile,
             productId: Number(productId),
             type,
             userId: req.user?.id,

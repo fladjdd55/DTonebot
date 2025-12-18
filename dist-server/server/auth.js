@@ -20,10 +20,16 @@ const redis = (0, redis_1.getRedis)();
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET)
     throw new Error('FATAL: JWT_SECRET must be set');
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+    throw new Error('JWT_SECRET must be at least 32 characters');
+}
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 // Encryption for refresh tokens at rest
-const ENCRYPTION_KEY = process.env.REFRESH_TOKEN_ENCRYPTION_KEY || JWT_SECRET;
+const ENCRYPTION_KEY = process.env.REFRESH_TOKEN_ENCRYPTION_KEY || '';
+if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+    throw new Error('REFRESH_TOKEN_ENCRYPTION_KEY must be set and at least 32 characters');
+}
 function encrypt(text) {
     const iv = crypto_1.default.randomBytes(16);
     const cipher = crypto_1.default.createCipheriv('aes-256-cbc', Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32)), iv);

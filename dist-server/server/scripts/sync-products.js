@@ -22,9 +22,9 @@ dotenv_1.default.config({ path: envPath });
 const db_1 = require("../db");
 const dtone_1 = require("../dtone");
 // ⚡ CONFIGURATION (OPTIMIZED)
-const CONCURRENCY = 5; // Worker count
-const RATE_LIMIT_DELAY = 1000; // 1s wait per worker
-const RETRY_DELAY = 10000; // 10s wait on 429
+const CONCURRENCY = 1; // Worker count
+const RATE_LIMIT_DELAY = 2000; // 1s wait per worker
+const RETRY_DELAY = 15000; // 10s wait on 429
 const CHECKPOINT_FILE = path_1.default.resolve(__dirname, 'sync-checkpoint.json');
 // Helper: Sleep function
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

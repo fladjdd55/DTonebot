@@ -5,7 +5,7 @@ export declare const paymentService: {
      * Now supports userId for linking transactions to accounts
      */
     createPaymentIntent(amount: number, currency: string, metadata?: {
-        mobile: string;
+        mobile?: string;
         productId: number;
         type: string;
         userId?: string;

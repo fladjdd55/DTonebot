@@ -8,6 +8,8 @@ exports.dtoneService = void 0;
 // @ts-ignore
 const dtone_1 = __importDefault(require("@api/dtone"));
 const dotenv_1 = __importDefault(require("dotenv"));
+// ✅ FIX: Import robust phone validator
+const libphonenumber_js_1 = require("libphonenumber-js");
 dotenv_1.default.config();
 // ==========================================
 // 1. CONFIGURATION
@@ -15,8 +17,6 @@ dotenv_1.default.config();
 const DTONE_API_KEY = process.env.DTONE_API_KEY;
 const DTONE_API_SECRET = process.env.DTONE_API_SECRET;
 const DTONE_MODE = process.env.DTONE_MODE || 'sandbox';
-// 1.15 = 15% profit on top of wholesale rate
-// ✅ UPDATED: Read from .env, default to 1.15 if missing
 const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 if (!DTONE_API_KEY || !DTONE_API_SECRET) {
     throw new Error('FATAL: Missing DTOne credentials in .env file');
@@ -40,8 +40,10 @@ function formatMobileForDtOne(mobile) {
     }
     return cleanMobile;
 }
+// ✅ FIX: Replaced Regex with libphonenumber-js
 function validateMobileNumber(mobile) {
-    return /^\+[1-9][0-9]{6,14}$/.test(mobile);
+    // Checks if it is a possible valid number in ANY country
+    return (0, libphonenumber_js_1.isValidPhoneNumber)(mobile);
 }
 function generateTransactionId() {
     const timestamp = Date.now();
@@ -125,6 +127,7 @@ exports.dtoneService = {
     async lookupMobileNumber(mobile) {
         const cleanMobile = formatMobileForDtOne(mobile);
         console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
+        // ✅ FIX: Uses the new robust validation
         if (!validateMobileNumber(cleanMobile)) {
             return { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' };
         }
@@ -206,8 +209,6 @@ exports.dtoneService = {
                 let costPriceMin;
                 let costPriceMax;
                 let costCurrency = prices.wholesale?.unit || source.unit || 'USD';
-                // ❌ REMOVED: Retail Price Priority
-                // We now rely on Wholesale + Margin
                 // 1. Use WHOLESALE Price + MARGIN
                 if (prices.wholesale?.amount) {
                     if (typeof prices.wholesale.amount === 'number') {
@@ -261,6 +262,7 @@ exports.dtoneService = {
     // ----------------------------------------
     async purchaseProduct(productId, mobile, amount, unit, type, callbackUrl) {
         const cleanMobile = formatMobileForDtOne(mobile);
+        // ✅ FIX: Uses the new robust validation
         if (!validateMobileNumber(cleanMobile)) {
             return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
         }
@@ -275,7 +277,6 @@ exports.dtoneService = {
                 callback_url: callbackUrl
             };
             const isRanged = type === 'RANGED_VALUE_RECHARGE' || type === 'RANGED_VALUE_PIN';
-            // ✅ Correct Calculation Mode for Ranged Products
             if (isRanged && amount > 0 && unit) {
                 payload.calculation_mode = 'DESTINATION_AMOUNT';
                 payload.destination = {

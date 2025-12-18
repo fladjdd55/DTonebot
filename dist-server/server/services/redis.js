@@ -81,23 +81,43 @@ class RedisService {
         return null;
     }
     /**
-     * Set value with TTL (seconds)
+     * Set value with support for:
+     * 1. Standard TTL: set(key, value, ttlSeconds)
+     * 2. Atomic Lock: set(key, value, 'EX', ttlSeconds, 'NX')
      */
-    async set(key, value, ttlSeconds) {
+    async set(key, value, arg3, arg4, arg5) {
+        // Detect usage mode
+        const isAtomicLock = typeof arg3 === 'string' && arg3 === 'EX' && arg5 === 'NX';
+        const ttlSeconds = isAtomicLock ? arg4 : arg3;
         if (this.client && this.isRedisAvailable) {
             try {
-                await this.client.setex(key, ttlSeconds, value);
-                return;
+                if (isAtomicLock && ttlSeconds) {
+                    // 'NX' returns 'OK' if set, null if exists
+                    return await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+                }
+                if (ttlSeconds) {
+                    await this.client.setex(key, ttlSeconds, value);
+                    return 'OK';
+                }
             }
             catch (error) {
                 console.error('[Redis] SET failed:', error.message);
             }
         }
-        // Fallback to in-memory
+        // Fallback Logic (In-Memory)
+        if (isAtomicLock) {
+            // Check if key exists and hasn't expired
+            const existing = this.fallbackCache.get(key);
+            if (existing && existing.expires > Date.now()) {
+                return null; // Failed to acquire lock (already exists)
+            }
+        }
+        // Set value in fallback
         this.fallbackCache.set(key, {
             value,
-            expires: Date.now() + (ttlSeconds * 1000)
+            expires: Date.now() + ((ttlSeconds || 0) * 1000)
         });
+        return 'OK';
     }
     /**
      * Delete key

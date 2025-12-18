@@ -16,12 +16,18 @@ const redis = getRedis();
 
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) throw new Error('FATAL: JWT_SECRET must be set');
+if (!JWT_SECRET || JWT_SECRET.length < 32) {
+  throw new Error('JWT_SECRET must be at least 32 characters');
+}
 
 const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 
 // Encryption for refresh tokens at rest
-const ENCRYPTION_KEY = process.env.REFRESH_TOKEN_ENCRYPTION_KEY || JWT_SECRET;
+const ENCRYPTION_KEY = process.env.REFRESH_TOKEN_ENCRYPTION_KEY || '';
+if (!ENCRYPTION_KEY || ENCRYPTION_KEY.length < 32) {
+  throw new Error('REFRESH_TOKEN_ENCRYPTION_KEY must be set and at least 32 characters');
+}
 
 function encrypt(text: string): string {
   const iv = crypto.randomBytes(16);

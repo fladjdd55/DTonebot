@@ -8,6 +8,8 @@ exports.requireAuth = requireAuth;
 exports.optionalAuth = optionalAuth;
 const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const db_1 = require("../db");
+const redis_1 = require("../services/redis"); // ✅ Import Redis
+const redis = (0, redis_1.getRedis)();
 // ✅ SECURITY: Fail fast if JWT_SECRET is missing
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
@@ -30,6 +32,14 @@ async function requireAuth(req, res, next) {
         const user = await db_1.db.user.findUnique({ where: { id: decoded.id } });
         if (!user) {
             return res.status(401).json({ error: 'User not found' });
+        }
+        // ✅ NEW: User-Specific Rate Limiting (Redis)
+        // Limit: 200 requests per hour per user
+        const userKey = `ratelimit:user:${user.id}`;
+        const count = await redis.incr(userKey, 3600); // 1 hour TTL (sliding window)
+        if (count > 200) {
+            console.warn(`[RateLimit] User ${user.id} exceeded limit (${count}/200)`);
+            return res.status(429).json({ error: 'Too many requests. Please try again in an hour.' });
         }
         req.user = {
             id: user.id,

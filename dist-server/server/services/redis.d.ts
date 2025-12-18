@@ -13,9 +13,11 @@ export declare class RedisService {
      */
     get(key: string): Promise<string | null>;
     /**
-     * Set value with TTL (seconds)
+     * Set value with support for:
+     * 1. Standard TTL: set(key, value, ttlSeconds)
+     * 2. Atomic Lock: set(key, value, 'EX', ttlSeconds, 'NX')
      */
-    set(key: string, value: string, ttlSeconds: number): Promise<void>;
+    set(key: string, value: string, arg3: number | string, arg4?: number, arg5?: string): Promise<string | null>;
     /**
      * Delete key
      */

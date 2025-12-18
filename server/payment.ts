@@ -38,7 +38,7 @@ export const paymentService = {
     amount: number, 
     currency: string, 
     metadata?: { 
-      mobile: string; 
+      mobile?: string; 
       productId: number; 
       type: string;
       userId?: string; 
