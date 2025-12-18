@@ -192,6 +192,13 @@ async function processPurchase(
          // Great! We found the secure record. Use the stored mobile number.
          mobileToUse = existing.mobile;
          console.log(`[Purchase] 🔄 Resuming INITIALIZED transaction for ${mobileToUse}`);
+
+	 // ✅ FIX: Update status to PENDING immediately
+         // This ensures the user sees "Processing" instead of "Initialized" while we call DTOne
+         await db.transaction.update({
+            where: { paymentIntentId: paymentId },
+            data: { status: 'PENDING', externalId: `pending_${paymentId}` }
+         });
       }
       else if (existing.status === 'COMPLETED') {
         return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };

@@ -294,7 +294,7 @@ exports.dtoneService = {
                     id: data.id,
                     statusId: data.status?.class?.id,
                     status: data.status?.message || data.status,
-                    externalId: data.external_id,
+                    externalId: externalId,
                     message: data.status?.message
                 }
             };
