@@ -272,9 +272,12 @@ export default function RechargeFlow() {
     setApiError('');
     
     try {
+      // ✅ FIX: Generate a unique Idempotency Key
+      // Format: "pi_{productId}_{amount}_{timestamp}_{random}"
+      const uniqueKey = `pi_${product.id}_${customAmountValue || product.amount}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const priceResponse = await fetch('/api/create-payment-intent', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'idempotency-key': uniqueKey },
         credentials: 'include',
         body: JSON.stringify({
           productId: product.id,
