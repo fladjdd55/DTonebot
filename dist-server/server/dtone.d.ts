@@ -5,5 +5,6 @@ export declare const dtoneService: {
     getProductsForOperator(operatorId: number, serviceId?: number, perPage?: number, lang?: string): Promise<ApiResponse<Product[]>>;
     purchaseProduct(productId: number, mobile: string, amount: number, unit?: string, type?: string, callbackUrl?: string): Promise<ApiResponse<TransactionResult>>;
     purchaseTopup(mobile: string, productId: number, amount?: number): Promise<ApiResponse<TransactionResult | LookupResult>>;
+    getTransaction(externalId: string): Promise<ApiResponse<any>>;
     getAllOperators(serviceId?: number): Promise<ApiResponse<any[]>>;
 };

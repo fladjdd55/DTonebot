@@ -375,6 +375,36 @@ export const dtoneService = {
   },
 
   // ----------------------------------------
+  // E.1. GET TRANSACTION STATUS
+  // ----------------------------------------
+  async getTransaction(externalId: string): Promise<ApiResponse<any>> {
+    console.log(`[DTOne] 🔍 Checking status for: ${externalId}`);
+    try {
+      // Fetch list filtering by our unique external_id
+      const response = await dtone.getTransactions({ external_id: externalId });
+      const raw = response.data || response;
+      const list = (Array.isArray(raw) ? raw : (raw.payload || [])) as any[];
+
+      if (list.length > 0) {
+        const txn = list[0];
+        return {
+          success: true,
+          data: {
+            id: txn.id,
+            statusId: txn.status?.class?.id,
+            status: txn.status?.message,
+            externalId: txn.external_id
+          }
+        };
+      }
+      return { success: false, error: 'Transaction not found', code: 'NOT_FOUND' };
+    } catch (error: any) {
+      const err = handleApiError(error, 'Get Transaction');
+      return { success: false, error: err.error, code: err.code };
+    }
+  },
+
+  // ----------------------------------------
   // F. GET ALL OPERATORS
   // ----------------------------------------
   async getAllOperators(serviceId: number = 1): Promise<ApiResponse<any[]>> {

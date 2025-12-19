@@ -357,6 +357,37 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
         res.status(500).send('Webhook handler failed');
     }
 });
+// ==================================================================
+// DTONE WEBHOOK (Handle async callbacks)
+// ==================================================================
+app.post('/api/hooks/dtone', async (req, res) => {
+    console.log('🪝 [DTOne Webhook] Received:', JSON.stringify(req.body));
+    const { external_id, status } = req.body;
+    if (!external_id || !status) {
+        return res.status(400).send('Invalid payload');
+    }
+    try {
+        const statusId = status.class?.id; // DTOne standard: 7 = Completed, 3/9 = Cancelled/Declined
+        let newStatus;
+        if (statusId === 7)
+            newStatus = client_1.TransactionStatus.COMPLETED;
+        else if ([3, 9].includes(statusId))
+            newStatus = client_1.TransactionStatus.FAILED;
+        if (newStatus) {
+            // Update DB
+            await db_1.db.transaction.update({
+                where: { externalId: external_id },
+                data: { status: newStatus }
+            });
+            console.log(`✅ [DTOne Webhook] Updated ${external_id} to ${newStatus}`);
+        }
+        return res.status(200).send('OK');
+    }
+    catch (err) {
+        console.error('❌ [DTOne Webhook] Error:', err);
+        return res.status(500).send('Error processing webhook');
+    }
+});
 app.use(express_1.default.json({ limit: '1mb' }));
 // ==================================================================
 // AUTHENTICATION ROUTES
@@ -606,8 +637,36 @@ app.post('/api/purchase', auth_1.optionalAuth, async (req, res) => {
     }
 });
 app.get('/api/transaction/:paymentId', async (req, res) => {
-    const txn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: req.params.paymentId } });
-    return res.json({ status: txn?.status || client_1.TransactionStatus.PENDING, externalId: txn?.externalId });
+    try {
+        const txn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: req.params.paymentId } });
+        if (!txn)
+            return res.status(404).json({ error: "Transaction not found" });
+        // ✅ SELF-HEALING: If stuck in PENDING, ask DTOne for an update
+        if (txn.status === client_1.TransactionStatus.PENDING && txn.externalId.startsWith('txn_')) {
+            const check = await dtone_1.dtoneService.getTransaction(txn.externalId);
+            if (check.success && check.data) {
+                // 🔴 FIX: Explicitly type this variable so it can change values
+                let newStatus = txn.status;
+                const sid = check.data.statusId;
+                if (sid === 7)
+                    newStatus = client_1.TransactionStatus.COMPLETED;
+                else if ([3, 9].includes(sid))
+                    newStatus = client_1.TransactionStatus.FAILED;
+                if (newStatus !== txn.status) {
+                    await db_1.db.transaction.update({
+                        where: { id: txn.id },
+                        data: { status: newStatus }
+                    });
+                    return res.json({ status: newStatus, externalId: txn.externalId });
+                }
+            }
+        }
+        return res.json({ status: txn.status, externalId: txn.externalId });
+    }
+    catch (error) {
+        console.error("Status Check Error:", error);
+        return res.status(500).json({ error: "Failed to check status" });
+    }
 });
 app.get('/api/user/transactions', auth_1.requireAuth, async (req, res) => {
     const page = parseInt(req.query.page) || 1;
