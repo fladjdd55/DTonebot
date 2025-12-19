@@ -781,6 +781,7 @@ export default function RechargeFlow() {
                product={pendingPurchase.product}
                mobile={pendingPurchase.mobile}
                operatorName={operator?.operatorName || 'Unknown Operator'}
+               operatorId={operator?.operatorId}
                amount={pendingPurchase.serverPrice?.localAmount || 0}
                totalCost={pendingPurchase.serverPrice?.usdPrice || 0}
              />
