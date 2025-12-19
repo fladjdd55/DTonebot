@@ -203,7 +203,7 @@ async function processPurchase(data, source = 'API') {
                 mobileToUse = existing.mobile;
                 await db_1.db.transaction.update({
                     where: { paymentIntentId: paymentId },
-                    data: { status: client_1.TransactionStatus.PENDING, externalId: `pending_${paymentId}` }
+                    data: { status: client_1.TransactionStatus.PENDING, externalId: `pending_${paymentId}`, processedVia: source }
                 });
             }
             else if (existing.status === client_1.TransactionStatus.COMPLETED) {
@@ -592,7 +592,8 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
                 currency: 'USD',
                 productType: type,
                 status: client_1.TransactionStatus.INITIALIZED,
-                userId: req.user?.id
+                userId: req.user?.id,
+                processedVia: 'API'
             }
         });
         // ✅ FIXED: Return localAmount, currency, and breakdown

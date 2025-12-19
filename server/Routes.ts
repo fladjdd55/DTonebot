@@ -234,7 +234,7 @@ async function processPurchase(
          mobileToUse = existing.mobile;
          await db.transaction.update({
             where: { paymentIntentId: paymentId },
-            data: { status: TransactionStatus.PENDING, externalId: `pending_${paymentId}` }
+            data: { status: TransactionStatus.PENDING, externalId: `pending_${paymentId}`, processedVia: source }
          });
       }
       else if (existing.status === TransactionStatus.COMPLETED) {
@@ -679,7 +679,8 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
         currency: 'USD',
         productType: type,
         status: TransactionStatus.INITIALIZED,
-        userId: req.user?.id
+        userId: req.user?.id,
+	processedVia: 'API'
       }
     });
 
