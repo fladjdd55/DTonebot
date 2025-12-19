@@ -155,6 +155,7 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min,
                                 maxAmount: p.max,
+				benefits: p.benefits || [],
                                 // ✅ NEW ARCHITECTURE: Split IDs
                                 serviceId: TARGET_SERVICE_ID,   // 1 (Mobile)
                                 subserviceId: p.subserviceId,   // 11 (Airtime), 12 (Data)...
@@ -176,6 +177,7 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min || null,
                                 maxAmount: p.max || null,
+				benefits: p.benefits || [],
                                 costPrice: p.costPrice || null,
                                 costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,

@@ -15,10 +15,6 @@ export interface Product {
   maxAmount?: number;
   
   benefits: string[];
-  costPrice?: number;         
-  costPriceMin?: number;      
-  costPriceMax?: number;      
-  costCurrency?: string;
   isRanged?: boolean;
 }
 

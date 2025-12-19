@@ -74,6 +74,7 @@ model Product {
   amount        Float?
   minAmount     Float?
   maxAmount     Float?
+  benefits     String[]  @default([])
   costPrice     Float?
   costPriceMin  Float?
   costPriceMax  Float?

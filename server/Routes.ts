@@ -69,6 +69,35 @@ async function getCachedOperators() {
   return fresh || [];
 }
 
+// ✅ HELPER: Calculate Safe Minimum Amount
+// This ensures the local 'minAmount' is high enough to meet the $5.00 USD limit
+function getSafeMinAmount(p: any): number {
+  let safeMin = p.minAmount;
+
+  // Only check Ranged products that have valid cost data
+  if (p.type === 'RANGED_VALUE' && p.minAmount && (p.costPriceMin || p.costPrice)) {
+    const baseMinCost = p.costPriceMin || p.costPrice;
+
+    // Avoid division by zero
+    if (baseMinCost > 0) {
+      const costPerUnit = baseMinCost / p.minAmount;
+
+      // Formula: We need (Cost * Margin) >= GLOBAL_MIN_USD
+      // Therefore: Cost >= (GLOBAL_MIN_USD / Margin)
+      // Units * CostPerUnit >= TargetCost
+      // Units >= TargetCost / CostPerUnit
+      const targetCostUsd = GLOBAL_MIN_USD / FALLBACK_MARGIN;
+      const requiredUnits = targetCostUsd / costPerUnit;
+
+      // If the required units to reach $5 are higher than operator's min, use ours
+      if (requiredUnits > p.minAmount) {
+        safeMin = Math.ceil(requiredUnits); // Round up to next whole number
+      }
+    }
+  }
+  return safeMin;
+}
+
 // ==================================================================
 // 🕒 CRON JOB
 // ==================================================================
@@ -237,6 +266,8 @@ async function processPurchase(
             status: TransactionStatus.PENDING,
             processedVia: source,
             userId: userId || null
+
+
           }
         });
       } catch (err: any) {
@@ -287,6 +318,21 @@ async function processPurchase(
       where: { paymentIntentId: paymentId },
       data: { status: dbStatus, externalId: result.data.externalId }
     });
+
+    if (userId) {
+      await db.auditLog.create({
+        data: {
+          action: 'PURCHASE',
+          userId: userId,
+          metadata: {
+            paymentId,
+            productId,
+            amount,
+            status: dbStatus
+          }
+        }
+      }).catch(console.error); // Don't fail transaction if log fails
+    }
 
     return { 
       success: dbStatus === TransactionStatus.COMPLETED || dbStatus === TransactionStatus.PENDING, 
@@ -477,15 +523,67 @@ app.get('/api/products', async (req: Request, res: Response): Promise<any> => {
   const whereClause: any = { operatorId: Number(operatorId) };
   if (currency) whereClause.currency = String(currency).toUpperCase();
 
+  // 1. Fetch from DB (Include cost fields for calculation, exclude 'benefits' if not in DB)
   const localProducts = await db.product.findMany({
     where: whereClause,
-    orderBy: { amount: 'asc' }
+    orderBy: { amount: 'asc' },
+    select: {
+      id: true,
+      name: true,
+      type: true,
+      serviceId: true,
+      subserviceId: true,
+      amount: true,
+      currency: true,
+      minAmount: true,
+      maxAmount: true,
+      benefits: true,
+      // Select costs to perform the check (we will strip them before returning)
+      costPrice: true,
+      costPriceMin: true
+    }
   });
 
-  if (localProducts.length > 0) return res.json(localProducts);
+  if (localProducts.length > 0) {
+    const safeProducts = localProducts.map(p => {
+      // Calculate safe minimum
+      const adjustedMin = getSafeMinAmount(p);
 
+      // Strip sensitive cost data
+      const { costPrice, costPriceMin, ...rest } = p;
+
+      return {
+        ...rest,
+        minAmount: adjustedMin
+      };
+    });
+    return res.json(safeProducts);
+  }
+
+  // 2. Fallback: Fetch from API
   const result = await dtoneService.getProductsForOperator(Number(operatorId));
-  return result.success ? res.json(result.data) : res.status(400).json({ error: result.error });
+
+  if (result.success && result.data) {
+    const safeProducts = result.data.map(p => {
+      // Calculate safe minimum
+      const adjustedMin = getSafeMinAmount(p);
+
+      return {
+       id: p.id,
+       name: p.name,
+       type: p.type,
+       amount: p.amount,
+       currency: p.currency,
+       minAmount: adjustedMin, // ✅ Use the adjusted minimum
+       maxAmount: p.max,
+       benefits: p.benefits,
+       isRanged: p.isRanged
+       // Costs are implicitly excluded here
+    }});
+    return res.json(safeProducts);
+  }
+
+  return res.status(400).json({ error: result.error });
 });
 
 app.post('/api/lookup', async (req, res) => {

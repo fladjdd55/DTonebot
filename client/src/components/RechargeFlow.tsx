@@ -10,11 +10,11 @@ import { formatPhoneNumber, extractDigits, validatePhoneNumber, type PhoneValida
 import { filterCountries, type Country } from '../shared/countryValidator';
 import { rechargeApi, type Product } from '../services/api';
 import PaymentModal from './PaymentModal';
+import ConfirmationModal from './ConfirmationModal';
 
 // Margin used ONLY for rough UI estimates. Real price comes from Server.
 const ESTIMATED_MARGIN = 1.15;
 
-// ✅ ENV VAR: Read Environment Variable (Default to true if missing)
 const ENABLE_CUSTOM_AMOUNT = import.meta.env.VITE_ENABLE_CUSTOM_AMOUNT === 'true';
 
 export default function RechargeFlow() {
@@ -42,7 +42,6 @@ export default function RechargeFlow() {
   const [isPayModalOpen, setIsPayModalOpen] = useState(false);
   const [isConfirmModalOpen, setIsConfirmModalOpen] = useState(false);
   
-  // ✅ SERVER-SIDE PRICE STORAGE
   const [pendingPurchase, setPendingPurchase] = useState<{
     product: Product;
     mobile: string;
@@ -101,11 +100,11 @@ export default function RechargeFlow() {
       fixed = fixed.filter(p => p.currency === currency);
     }
     
-    // Rough estimate filter
+    // Rough estimate filter (✅ FIXED: Using amount instead of costPrice)
     if (priceFilter !== 'ALL') {
       fixed = fixed.filter(p => {
-        const cost = p.costPrice || parseFloat(p.amount);
-        const estimatedUsd = cost * ESTIMATED_MARGIN;
+        const baseCost = parseFloat(p.amount) || 0; 
+        const estimatedUsd = baseCost * ESTIMATED_MARGIN;
         return Math.abs(estimatedUsd - priceFilter) <= 3;
       });
     }
@@ -223,6 +222,10 @@ export default function RechargeFlow() {
   };
 
   const handleManualSelect = (op: any) => {
+    if (!validationState?.valid) {
+      setApiError('Please enter a valid mobile number first.');
+      return;
+    }
     setOperator({
       operatorId: op.id,
       operatorName: op.name,
@@ -257,11 +260,12 @@ export default function RechargeFlow() {
     setPendingPurchase(null);
   };
 
-  // ==========================================
-  // PURCHASE HANDLERS
-  // ==========================================
-
   const handlePurchase = async (product: Product, customAmountValue?: number) => {
+    if (!validationState?.valid || !validationState.fullNumber) {
+      setApiError('Invalid mobile number. Please check and try again.');
+      return;
+    }
+
     setLoading(true);
     setApiError('');
     
@@ -273,7 +277,7 @@ export default function RechargeFlow() {
         credentials: 'include',
         body: JSON.stringify({
           productId: product.id,
-          mobile: validationState?.fullNumber || '',
+          mobile: validationState.fullNumber,
           type: product.type,
           customAmount: customAmountValue
         })
@@ -288,7 +292,7 @@ export default function RechargeFlow() {
 
       setPendingPurchase({
         product,
-        mobile: validationState?.fullNumber || '',
+        mobile: validationState.fullNumber,
         customAmount: customAmountValue,
         clientSecret: priceData.clientSecret,
         serverPrice: {
@@ -384,10 +388,8 @@ export default function RechargeFlow() {
 
   const handleCustomAmountChange = (value: string) => {
     setCustomAmount(value);
-    // ✅ FIXED: Using minAmount and maxAmount (Database Fields)
     if (selectedRangedProduct && value) {
       const val = parseFloat(value);
-      // Use minAmount/maxAmount, falling back to 0/Infinity if missing
       const min = selectedRangedProduct.minAmount || 0;
       const max = selectedRangedProduct.maxAmount || Infinity;
 
@@ -540,7 +542,11 @@ export default function RechargeFlow() {
               
               {!showManualSelection && selectedCountry && (
                 <div className="text-center mt-2">
-                  <button onClick={() => setShowManualSelection(true)} className="text-xs text-indigo-500 hover:underline">
+                  <button 
+                    onClick={() => setShowManualSelection(true)} 
+                    disabled={!validationState?.valid}
+                    className="text-xs text-indigo-500 hover:underline disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
                     Select operator manually
                   </button>
                 </div>
@@ -637,7 +643,7 @@ export default function RechargeFlow() {
                     </div>
                 ) : (
                 <>
-                {/* Custom Amount for Airtime - ✅ CONTROLLED BY ENV VAR */}
+                {/* Custom Amount for Airtime */}
                 {activeTab === 'AIRTIME' && rangedProducts.length > 0 && ENABLE_CUSTOM_AMOUNT && (
                   <div className="border-b pb-4 mb-4">
                     <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
@@ -659,7 +665,6 @@ export default function RechargeFlow() {
                       </button>
                     ) : (
                       <div className="p-4 rounded-xl border-2 border-indigo-300 bg-indigo-50/50">
-                         {/* ✅ FIXED: Displaying minAmount and maxAmount */}
                          <div className="text-sm text-gray-600 mb-3">
                               Range: <span className="font-medium">{selectedRangedProduct?.minAmount} - {selectedRangedProduct?.maxAmount} {selectedRangedProduct?.currency}</span>
                          </div>
@@ -709,9 +714,9 @@ export default function RechargeFlow() {
                              {p.currency}
                           </span>
                         </div>
-                        {/* Rough Estimate for UI only */}
+                        {/* Rough Estimate for UI only - ✅ FIXED: Using parsed amount instead of costPrice */}
                         <span className="text-[11px] text-indigo-600 font-bold bg-indigo-50 px-2 py-0.5 rounded-full mt-1">
-                           ~${((p.costPrice || parseFloat(p.amount)) * ESTIMATED_MARGIN).toFixed(2)}
+                           ~${((parseFloat(p.amount) || 0) * ESTIMATED_MARGIN).toFixed(2)}
                         </span>
                       </button>
                     ))}
@@ -727,66 +732,58 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* STEP 3: Success */}
+          {/* STEP 3: Success - ✅ REDESIGNED RECEIPT */}
           {step === 3 && txnResult && (
             <div className="text-center py-8">
               <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Check className="w-8 h-8 text-green-600" />
               </div>
               <h2 className="text-2xl font-bold text-gray-800">Success!</h2>
-              <div className="bg-gray-50 p-4 rounded-lg text-left text-sm space-y-2 mb-6">
-                <div className="flex justify-between"><span>Status:</span> <span className="font-bold">{txnResult.status || 'COMPLETED'}</span></div>
-                <div className="flex justify-between"><span>ID:</span> <span className="font-mono">{txnResult.id}</span></div>
-                <div className="flex justify-between"><span>Mobile:</span> <span className="font-mono">{validationState?.fullNumber}</span></div>
+              <p className="text-gray-500 mb-6">Your top-up has been sent.</p>
+              
+              <div className="bg-gray-50 p-5 rounded-xl text-left text-sm space-y-4 border border-gray-100">
+                
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Mobile Number</span>
+                  <span className="font-bold text-gray-900 font-mono text-base">{validationState?.fullNumber}</span>
+                </div>
+
+                <div className="flex justify-between items-center">
+                  <span className="text-gray-500">Status</span>
+                  <span className="bg-green-100 text-green-700 px-2 py-0.5 rounded text-xs font-bold uppercase tracking-wide">
+                    {txnResult.status || 'COMPLETED'}
+                  </span>
+                </div>
+
+                <div className="border-t border-gray-200 my-2"></div> {/* Separator Line */}
+
+                <div className="flex flex-col gap-1">
+                  <span className="text-gray-400 text-xs uppercase tracking-wider">Transaction ID</span>
+                  <span className="font-mono text-gray-600 text-xs break-all">
+                    {txnResult.externalId || txnResult.id}
+                  </span>
+                </div>
+                
               </div>
-              <button onClick={resetFlow} className="w-full bg-gray-900 text-white py-3 rounded-lg font-bold">Send Another</button>
+              
+              <button onClick={resetFlow} className="w-full mt-6 bg-gray-900 text-white py-3 rounded-lg font-bold shadow-lg shadow-gray-200 transition-all hover:bg-black">
+                Send Another
+              </button>
             </div>
           )}
 
           {/* CONFIRMATION MODAL */}
           {pendingPurchase && (
-            <div className={`fixed inset-0 z-50 ${isConfirmModalOpen ? 'flex' : 'hidden'} items-center justify-center p-4 bg-black/60 backdrop-blur-sm`}>
-              <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 animate-in fade-in zoom-in duration-200">
-                <h3 className="font-bold text-xl mb-4 text-gray-900">Confirm Purchase</h3>
-                
-                <div className="space-y-4 mb-6">
-                  <div className="bg-gray-50 p-4 rounded-xl space-y-3">
-                    <div className="flex justify-between items-center pb-3 border-b border-gray-200">
-                      <span className="text-gray-500 text-sm">Recipient Gets</span>
-                      <span className="font-bold text-gray-900 text-lg">
-                        {pendingPurchase.serverPrice?.localAmount} {pendingPurchase.serverPrice?.currency}
-                      </span>
-                    </div>
-                    
-                    <div className="flex justify-between items-center">
-                      <span className="text-indigo-600 font-medium">You Pay</span>
-                      <span className="font-bold text-indigo-700 text-xl">
-                        ${pendingPurchase.serverPrice?.usdPrice.toFixed(2)} USD
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-gray-400 text-center">
-                    Sending to <span className="font-mono text-gray-600">{pendingPurchase.mobile}</span>
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <button 
-                    onClick={() => setIsConfirmModalOpen(false)}
-                    className="flex-1 py-3 border border-gray-300 text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition-colors"
-                  >
-                    Cancel
-                  </button>
-                  <button 
-                    onClick={handleConfirmPurchase}
-                    className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors shadow-lg shadow-indigo-200"
-                  >
-                    Confirm
-                  </button>
-                </div>
-              </div>
-            </div>
+             <ConfirmationModal 
+               isOpen={isConfirmModalOpen}
+               onClose={() => setIsConfirmModalOpen(false)}
+               onConfirm={handleConfirmPurchase}
+               product={pendingPurchase.product}
+               mobile={pendingPurchase.mobile}
+               operatorName={operator?.operatorName || 'Unknown Operator'}
+               amount={pendingPurchase.serverPrice?.localAmount || 0}
+               totalCost={pendingPurchase.serverPrice?.usdPrice || 0}
+             />
           )}
 
           {/* PAYMENT MODAL */}
