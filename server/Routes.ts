@@ -32,8 +32,14 @@ app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
 
+const GLOBAL_MIN_USD = Number(
+  process.env.MIN_USD_ORDER ||
+  process.env.VITE_MIN_USD_ORDER ||
+  process.env.MIN_ORDER ||
+  5
+);
+
 const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
-const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
 
 // ==================================================================
 // 🚀 SCALABLE CACHE (Redis-Based)
@@ -72,7 +78,7 @@ async function getCachedOperators() {
 // ✅ HELPER: Calculate Safe Minimum Amount
 // This ensures the local 'minAmount' is high enough to meet the $5.00 USD limit
 function getSafeMinAmount(p: any): number {
-  let safeMin = p.minAmount;
+  let safeMin = p.minAmount || 0;
 
   // Only check Ranged products that have valid cost data
   if (p.type === 'RANGED_VALUE' && p.minAmount && (p.costPriceMin || p.costPrice)) {
