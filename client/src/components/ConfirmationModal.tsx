@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { X, ArrowRight } from 'lucide-react';
 import { Product } from '../services/api';
 
