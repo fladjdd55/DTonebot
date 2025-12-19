@@ -1,4 +1,3 @@
-//
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -21,7 +20,6 @@ import { syncOperators } from './scripts/sync-operators';
 import { syncProducts } from './scripts/sync-products';
 import { paymentService } from './payment';
 import { authService } from './auth';
-import { priceVerificationService } from './priceVerification';
 import { db } from './db';
 
 const app = express();
@@ -32,6 +30,7 @@ app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
 
+// ✅ FIX: Check multiple env var names to ensure we catch the value
 const GLOBAL_MIN_USD = Number(
   process.env.MIN_USD_ORDER ||
   process.env.VITE_MIN_USD_ORDER ||
@@ -76,29 +75,29 @@ async function getCachedOperators() {
 }
 
 // ✅ HELPER: Calculate Safe Minimum Amount
-// This ensures the local 'minAmount' is high enough to meet the $5.00 USD limit
 function getSafeMinAmount(p: any): number {
   let safeMin = p.minAmount || 0;
 
-  // Only check Ranged products that have valid cost data
-  if (p.type === 'RANGED_VALUE' && p.minAmount && (p.costPriceMin || p.costPrice)) {
+  // Only check Ranged products
+  if (p.type === 'RANGED_VALUE') {
+    // 1. Try to use cached cost price from DB
     const baseMinCost = p.costPriceMin || p.costPrice;
 
-    // Avoid division by zero
-    if (baseMinCost > 0) {
-      const costPerUnit = baseMinCost / p.minAmount;
-
-      // Formula: We need (Cost * Margin) >= GLOBAL_MIN_USD
-      // Therefore: Cost >= (GLOBAL_MIN_USD / Margin)
-      // Units * CostPerUnit >= TargetCost
-      // Units >= TargetCost / CostPerUnit
+    if (baseMinCost && baseMinCost > 0) {
+      const costPerUnit = baseMinCost / (p.minAmount || 1);
+      
+      // Target: We need (Cost * Margin) >= GLOBAL_MIN_USD
       const targetCostUsd = GLOBAL_MIN_USD / FALLBACK_MARGIN;
       const requiredUnits = targetCostUsd / costPerUnit;
 
-      // If the required units to reach $5 are higher than operator's min, use ours
-      if (requiredUnits > p.minAmount) {
-        safeMin = Math.ceil(requiredUnits); // Round up to next whole number
+      if (requiredUnits > safeMin) {
+        safeMin = Math.ceil(requiredUnits);
       }
+    } 
+    // 2. Fallback: If DB missing cost (Sync didn't run), assume 1-to-1 conversion roughly to prevent huge losses
+    else if (p.currency === 'USD') {
+       const targetUnits = GLOBAL_MIN_USD / FALLBACK_MARGIN;
+       if (targetUnits > safeMin) safeMin = Math.ceil(targetUnits);
     }
   }
   return safeMin;
@@ -152,7 +151,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
       frameSrc: ["https://js.stripe.com"],
       connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"],
-      imgSrc: ["'self'", "data:", "https:"]
+      imgSrc: ["'self'", "data:", "https:", "https://operator-logo.dtone.com"]
     }
   }
 }));
@@ -234,7 +233,12 @@ async function processPurchase(
          mobileToUse = existing.mobile;
          await db.transaction.update({
             where: { paymentIntentId: paymentId },
-            data: { status: TransactionStatus.PENDING, externalId: `pending_${paymentId}`, processedVia: source }
+            data: { 
+              status: TransactionStatus.PENDING, 
+              externalId: `pending_${paymentId}`,
+              // ✅ FIX: Save who processed this (API or WEBHOOK)
+              processedVia: source 
+            }
          });
       }
       else if (existing.status === TransactionStatus.COMPLETED) {
@@ -270,10 +274,8 @@ async function processPurchase(
             currency,
             productType: type,
             status: TransactionStatus.PENDING,
-            processedVia: source,
+            processedVia: source, // ✅ FIX: Save source
             userId: userId || null
-
-
           }
         });
       } catch (err: any) {
@@ -285,6 +287,7 @@ async function processPurchase(
       }
     }
 
+    // Determine callback URL based on environment
     const callbackUrl = process.env.DTONE_CALLBACK_URL
       ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
       : undefined;
@@ -337,7 +340,7 @@ async function processPurchase(
             status: dbStatus
           }
         }
-      }).catch(console.error); // Don't fail transaction if log fails
+      }).catch(console.error);
     }
 
     return { 
@@ -413,11 +416,11 @@ app.post('/api/hooks/stripe',
   }
 );
 
-
+// ✅ FIX: ADD DTONE WEBHOOK
 // ==================================================================
 // DTONE WEBHOOK (Handle async callbacks)
 // ==================================================================
-app.post('/api/hooks/dtone', async (req: Request, res: Response): Promise<any> => {
+app.post('/api/hooks/dtone', express.json(), async (req: Request, res: Response): Promise<any> => {
   console.log('🪝 [DTOne Webhook] Received:', JSON.stringify(req.body));
 
   const { external_id, status } = req.body;
@@ -680,11 +683,11 @@ app.post('/api/create-payment-intent', optionalAuth, async (req: Request, res: R
         productType: type,
         status: TransactionStatus.INITIALIZED,
         userId: req.user?.id,
-	processedVia: 'API'
+        // ✅ FIX: Mark as started by API
+        processedVia: 'API' 
       }
     });
 
-    // ✅ FIXED: Return localAmount, currency, and breakdown
     res.json({ 
       ...result, 
       chargeAmount: finalCharge,
@@ -726,6 +729,7 @@ app.post('/api/purchase', optionalAuth, async (req: Request, res: Response): Pro
   }
 });
 
+// ✅ FIX: UPDATED SELF-HEALING STATUS CHECK
 app.get('/api/transaction/:paymentId', async (req, res): Promise<any> => {
   try {
     const txn = await db.transaction.findUnique({ where: { paymentIntentId: req.params.paymentId } });
@@ -737,7 +741,7 @@ app.get('/api/transaction/:paymentId', async (req, res): Promise<any> => {
       const check = await dtoneService.getTransaction(txn.externalId);
       
       if (check.success && check.data) {
-        // 🔴 FIX: Explicitly type this variable so it can change values
+        // Explicitly type to avoid TS errors
         let newStatus: TransactionStatus = txn.status;
         const sid = check.data.statusId;
 
