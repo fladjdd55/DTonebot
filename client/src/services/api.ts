@@ -1,20 +1,24 @@
+// client/src/services/api.ts
+
 export interface Product {
   id: number;
   name: string;
   description?: string;
   type: string;
-  serviceId: number;      // 1=Mobile, 4=GiftCards, 3=Utilities
-  subserviceId?: number;     // 11=Airtime, 12=Bundle, 13=Data, 41=Retail...
-  amount: string;
+  serviceId: number;      
+  subserviceId?: number;     
+  amount: string;         // Note: Prisma returns this as a number usually, but string is safe for display
   currency: string;
-  min: number;
-  max: number;
+  
+  // ✅ FIXED: Matched DB fields (was 'min' and 'max')
+  minAmount?: number;
+  maxAmount?: number;
+  
   benefits: string[];
-  costPrice?: number;         // Fixed cost OR min cost for ranged
-  costPriceMin?: number;      // Min USD cost (for RANGED products)
-  costPriceMax?: number;      // Max USD cost (for RANGED products)
+  costPrice?: number;         
+  costPriceMin?: number;      
+  costPriceMax?: number;      
   costCurrency?: string;
-  // ✅ Helper flag
   isRanged?: boolean;
 }
 
@@ -38,14 +42,12 @@ export const getAccessToken = () => accessToken;
 // 🌐 SMART FETCH (Handles Auth + Refresh + Timeout)
 // ==================================================================
 async function fetchWithAuth(url: string, options: RequestInit = {}) {
-  // 1. Prepare Headers (Attach Token if exists)
   const headers = new Headers(options.headers || {});
   headers.set('Content-Type', 'application/json');
   if (accessToken) {
     headers.set('Authorization', `Bearer ${accessToken}`);
   }
 
-  // 2. Prepare Config (Timeout + Credentials)
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   const signal = options.signal || controller.signal;
@@ -54,17 +56,15 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
     ...options,
     headers,
     signal,
-    credentials: 'include', // ✅ Critical: Sends Cookies (Refresh Token)
+    credentials: 'include', 
   };
 
   try {
     let response = await fetch(url, config);
     clearTimeout(id);
 
-    // 3. 🔄 INTERCEPT 401: Attempt Token Refresh
     if (response.status === 401) {
       try {
-        // Call Refresh Endpoint (Uses HttpOnly Cookie)
         const refreshRes = await fetch(`${API_URL}/auth/refresh`, {
           method: 'POST',
           credentials: 'include' 
@@ -73,12 +73,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
         if (refreshRes.ok) {
           const data = await refreshRes.json();
           if (data.accessToken) {
-            // ✅ Success: Update Memory Token & Retry Original Request
             setAccessToken(data.accessToken);
-            
             headers.set('Authorization', `Bearer ${data.accessToken}`);
             const retryConfig = { ...config, headers };
-            
             response = await fetch(url, retryConfig);
           } else {
             throw new Error('No access token returned');
@@ -87,10 +84,9 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
           throw new Error('Refresh failed');
         }
       } catch (err) {
-        // ❌ Refresh Failed: Force Logout
         setAccessToken(null);
-        window.location.href = '/login'; // Redirect to login
-        return response; // Return original 401 so caller knows it failed
+        window.location.href = '/login'; 
+        return response; 
       }
     }
 

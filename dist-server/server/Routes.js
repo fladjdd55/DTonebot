@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+//
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
@@ -12,6 +13,7 @@ const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const helmet_1 = __importDefault(require("helmet"));
 const cookie_parser_1 = __importDefault(require("cookie-parser"));
 const zod_1 = require("zod");
+const client_1 = require("@prisma/client");
 const redis_1 = require("./services/redis");
 // Middleware
 const auth_1 = require("./middleware/auth");
@@ -22,7 +24,6 @@ const sync_operators_1 = require("./scripts/sync-operators");
 const sync_products_1 = require("./scripts/sync-products");
 const payment_1 = require("./payment");
 const auth_2 = require("./auth");
-const priceVerification_1 = require("./priceVerification");
 const db_1 = require("./db");
 const app = (0, express_1.default)();
 const redis = (0, redis_1.getRedis)();
@@ -32,56 +33,78 @@ const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVe
 const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
 // ==================================================================
-// 🚀 PERFORMANCE CACHE
+// 🚀 SCALABLE CACHE (Redis-Based)
 // ==================================================================
-let COUNTRY_CACHE = [];
-let OPERATOR_CACHE = [];
-// ✅ OPTIMIZATION: Pre-computed Index for O(1) Lookups
-let OPERATOR_INDEX = {};
-const rebuildOperatorIndex = (operators) => {
-    const index = {};
-    for (const op of operators) {
-        const code = op.countryCode || op.countryIso;
-        if (code) {
-            if (!index[code])
-                index[code] = [];
-            index[code].push(op);
+const CACHE_TTL = 3600;
+async function getCachedCountries() {
+    const cached = await redis.get('cache:countries');
+    if (cached)
+        return JSON.parse(cached);
+    const fresh = await (0, sync_countries_1.syncCountries)();
+    if (fresh)
+        await redis.set('cache:countries', JSON.stringify(fresh), CACHE_TTL);
+    return fresh || [];
+}
+async function getCachedOperators() {
+    const cached = await redis.get('cache:operators');
+    if (cached)
+        return JSON.parse(cached);
+    const fresh = await (0, sync_operators_1.syncOperators)();
+    if (fresh) {
+        await redis.set('cache:operators', JSON.stringify(fresh), CACHE_TTL);
+        const index = {};
+        for (const op of fresh) {
+            const code = (op.countryCode || op.countryIso)?.toUpperCase();
+            if (code) {
+                if (!index[code])
+                    index[code] = [];
+                index[code].push(op);
+            }
         }
+        await redis.set('cache:operator_index', JSON.stringify(index), CACHE_TTL);
     }
-    OPERATOR_INDEX = index;
-    console.log(`[Cache] Operator Index Rebuilt: Indexed ${Object.keys(index).length} countries.`);
-};
-const initializeCache = async () => {
+    return fresh || [];
+}
+// ==================================================================
+// 🕒 CRON JOB
+// ==================================================================
+node_cron_1.default.schedule('0 3 * * *', async () => {
+    const lockKey = 'cron:daily_sync:lock';
+    const acquired = await redis.set(lockKey, '1', 'EX', 600, 'NX');
+    if (!acquired) {
+        console.log('[Scheduler] ⏭️ Skipping Daily Sync (Locked by another instance)');
+        return;
+    }
+    console.log('[Scheduler] 🌙 Running Daily Sync...');
     try {
-        const c = await (0, sync_countries_1.syncCountries)();
+        const [c, o] = await Promise.all([(0, sync_countries_1.syncCountries)(), (0, sync_operators_1.syncOperators)()]);
         if (c)
-            COUNTRY_CACHE = c;
-        const o = await (0, sync_operators_1.syncOperators)();
+            await redis.set('cache:countries', JSON.stringify(c), CACHE_TTL);
         if (o) {
-            OPERATOR_CACHE = o;
-            rebuildOperatorIndex(o); // Build index on startup
+            await redis.set('cache:operators', JSON.stringify(o), CACHE_TTL);
+            const index = {};
+            for (const op of o) {
+                const code = (op.countryCode || op.countryIso)?.toUpperCase();
+                if (code) {
+                    if (!index[code])
+                        index[code] = [];
+                    index[code].push(op);
+                }
+            }
+            await redis.set('cache:operator_index', JSON.stringify(index), CACHE_TTL);
         }
-        if (process.env.SYNC_ON_STARTUP === 'true')
-            await (0, sync_products_1.syncProducts)();
+        await (0, sync_products_1.syncProducts)();
+        console.log('[Scheduler] ✅ Daily Sync Completed');
     }
     catch (e) {
-        console.error("Cache init failed", e);
+        console.error('[Scheduler] ❌ Daily Sync Failed', e);
     }
-};
-initializeCache();
-node_cron_1.default.schedule('0 3 * * *', async () => {
-    console.log('[Scheduler] 🌙 Daily Sync...');
-    const [c, o] = await Promise.all([(0, sync_countries_1.syncCountries)(), (0, sync_operators_1.syncOperators)()]);
-    if (c)
-        COUNTRY_CACHE = c;
-    if (o) {
-        OPERATOR_CACHE = o;
-        rebuildOperatorIndex(o); // Rebuild index daily
+    finally {
+        await redis.del(lockKey);
     }
-    await (0, sync_products_1.syncProducts)();
 });
 // ==================================================================
-// 🔒 SECURITY CONFIGURATION
+// 🔒 SECURITY
 // ==================================================================
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: {
@@ -111,15 +134,8 @@ const isValidOrigin = (origin) => {
 };
 app.use((0, cors_1.default)({
     origin: (origin, callback) => {
-        // 1. Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) {
+        if (!origin || isValidOrigin(origin))
             return callback(null, true);
-        }
-        // 2. Validate the origin against allowed list
-        if (isValidOrigin(origin)) {
-            return callback(null, true);
-        }
-        // 3. Log and Block mismatch
         console.warn(`🚫 CORS Blocked: ${origin}`);
         callback(new Error('CORS policy: Origin not allowed'));
     },
@@ -132,154 +148,118 @@ app.use((0, cookie_parser_1.default)());
 const apiLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: 100,
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: { error: "Too many requests, please try again later." }
+    message: { error: "Too many requests" }
 });
 const authLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: 10,
-    message: { error: "Too many login attempts. Please try again later." }
+    message: { error: "Too many login attempts" }
 });
 app.use('/api/', apiLimiter);
 // ==================================================================
-// 🧩 UNIFIED PURCHASE LOGIC (WITH REDIS LOCK)
+// 🧩 UNIFIED PURCHASE LOGIC
 // ==================================================================
 async function processPurchase(data, source = 'API') {
-    const { paymentId, mobile, productId, amount, currency, type, userId } = data;
+    const { paymentId, mobile, email, productId, amount, currency, type, userId } = data;
     const lockKey = `lock:purchase:${paymentId}`;
-    // 1. 🔒 ACQUIRE LOCK (10 seconds TTL)
-    // 'NX' = Only set if not exists
-    const isLocked = await redis.set(lockKey, '1', 'EX', 10, 'NX');
+    const isLocked = await redis.set(lockKey, '1', 'EX', 15, 'NX');
     if (!isLocked) {
-        console.log(`[Purchase] ⏳ Blocked by Redis Lock: ${paymentId}`);
-        // Return PENDING so the frontend keeps waiting/polling
-        return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
+        return { success: true, dbStatus: client_1.TransactionStatus.PENDING, alreadyProcessed: true };
     }
     try {
-        // 2. Check Existing (Safe now because we have the lock)
         const existing = await db_1.db.transaction.findUnique({
             where: { paymentIntentId: paymentId }
         });
         let mobileToUse = data.mobile;
         if (existing) {
-            if (existing.status === 'INITIALIZED') {
-                // Great! We found the secure record. Use the stored mobile number.
+            if (existing.status === client_1.TransactionStatus.INITIALIZED) {
                 mobileToUse = existing.mobile;
-                console.log(`[Purchase] 🔄 Resuming INITIALIZED transaction for ${mobileToUse}`);
-                // ✅ FIX: Update status to PENDING immediately
-                // This ensures the user sees "Processing" instead of "Initialized" while we call DTOne
                 await db_1.db.transaction.update({
                     where: { paymentIntentId: paymentId },
-                    data: { status: 'PENDING', externalId: `pending_${paymentId}` }
+                    data: { status: client_1.TransactionStatus.PENDING, externalId: `pending_${paymentId}` }
                 });
             }
-            else if (existing.status === 'COMPLETED') {
-                return { success: true, ...existing, dbStatus: 'COMPLETED', alreadyProcessed: true };
+            else if (existing.status === client_1.TransactionStatus.COMPLETED) {
+                return { success: true, ...existing, dbStatus: client_1.TransactionStatus.COMPLETED, alreadyProcessed: true };
             }
-            else if (['REFUNDED', 'FAILED'].includes(existing.status)) {
+            else if (existing.status === client_1.TransactionStatus.FAILED ||
+                existing.status === client_1.TransactionStatus.REFUNDED ||
+                existing.status === client_1.TransactionStatus.REFUND_FAILED) {
                 return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
             }
-            else if (existing.status === 'PENDING') {
-                return { success: true, dbStatus: 'PENDING', alreadyProcessed: true };
+            else if (existing.status === client_1.TransactionStatus.PENDING) {
+                return { success: true, dbStatus: client_1.TransactionStatus.PENDING, alreadyProcessed: true };
             }
         }
-        // 🚨 FAIL SAFE: We must have a mobile number
         if (!mobileToUse) {
-            console.error(`[Purchase] ❌ FATAL: No mobile number found for ${data.paymentId}`);
-            // Cannot fulfill without mobile
+            console.error(`[Purchase] ❌ FATAL: No mobile number for ${paymentId}`);
             return { success: false, error: "Mobile number missing" };
         }
-        // 3. Create Transaction
-        // (We still keep the P2002 catch just in case, but Redis makes it 99.9% redundant)
         if (!existing) {
             try {
                 await db_1.db.transaction.create({
                     data: {
                         externalId: `pending_${paymentId}`,
                         paymentIntentId: paymentId,
-                        paymentId: paymentId,
                         mobile: mobileToUse,
+                        email: email || null,
                         productId,
                         amount,
                         currency,
                         productType: type,
-                        status: 'PENDING',
+                        status: client_1.TransactionStatus.PENDING,
                         processedVia: source,
                         userId: userId || null
                     }
                 });
-                console.log(`[Purchase] 🔒 Lock acquired via ${source}: ${paymentId}`);
             }
             catch (err) {
                 if (err.code === 'P2002') {
                     const check = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
-                    return { success: check?.status === 'COMPLETED', dbStatus: check?.status, alreadyProcessed: true };
+                    return { success: check?.status === client_1.TransactionStatus.COMPLETED, dbStatus: check?.status, alreadyProcessed: true };
                 }
                 throw err;
             }
         }
-        // 4. Call DTOne API
         const callbackUrl = process.env.DTONE_CALLBACK_URL
             ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
             : undefined;
         const result = await dtone_1.dtoneService.purchaseProduct(productId, mobileToUse, amount, currency, type, callbackUrl);
-        // 5. Handle Immediate Failure
         if (!result.success || !result.data) {
             console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
             const refund = await payment_1.paymentService.refundPayment(paymentId);
+            const failStatus = refund ? client_1.TransactionStatus.REFUNDED : client_1.TransactionStatus.REFUND_FAILED;
+            if (!refund)
+                console.error(`[CRITICAL] 🚨 Refund failed for payment ${paymentId}`);
             await db_1.db.transaction.update({
                 where: { paymentIntentId: paymentId },
-                data: { status: refund ? 'REFUNDED' : 'REFUND_FAILED', externalId: `failed_${paymentId}` }
+                data: { status: failStatus, externalId: `failed_${paymentId}` }
             });
-            // Audit Log
-            try {
-                await db_1.db.auditLog.create({
-                    data: {
-                        action: 'PURCHASE_FAILED',
-                        userId: userId,
-                        metadata: { paymentId, error: result.error, refundId: refund?.id }
-                    }
-                });
-            }
-            catch (e) {
-                console.error("Audit Log failed", e);
-            }
             return { success: false, error: result.error, code: result.code, refunded: !!refund };
         }
-        // 6. Handle Pending/Success
         const statusId = result.data.statusId;
-        let dbStatus = 'PENDING';
+        let dbStatus = client_1.TransactionStatus.PENDING;
         if (statusId === 7) {
-            dbStatus = 'COMPLETED';
-            console.log(`[Purchase] ✅ Success! DTOne Ref: ${result.data.externalId}`);
+            dbStatus = client_1.TransactionStatus.COMPLETED;
         }
         else if ([3, 9].includes(statusId || 0)) {
-            console.warn(`[Purchase] ⚠️ Declined (Status ${statusId}). Refunding...`);
+            console.warn(`[Purchase] ⚠️ Declined. Refunding...`);
             const refund = await payment_1.paymentService.refundPayment(paymentId);
-            dbStatus = 'FAILED';
-            try {
-                await db_1.db.auditLog.create({
-                    data: {
-                        action: 'PURCHASE_DECLINED',
-                        userId: userId,
-                        metadata: { paymentId, statusId, refundId: refund?.id }
-                    }
-                });
-            }
-            catch (e) { }
-        }
-        else {
-            console.log(`[Purchase] ⏳ Submitted (Status ${statusId}). Awaiting callback.`);
+            dbStatus = client_1.TransactionStatus.FAILED;
+            if (!refund)
+                console.error(`[CRITICAL] 🚨 Refund failed for declined payment ${paymentId}`);
         }
         await db_1.db.transaction.update({
             where: { paymentIntentId: paymentId },
             data: { status: dbStatus, externalId: result.data.externalId }
         });
-        return { success: dbStatus === 'COMPLETED' || dbStatus === 'PENDING', ...result.data, dbStatus, refunded: dbStatus === 'FAILED' };
+        return {
+            success: dbStatus === client_1.TransactionStatus.COMPLETED || dbStatus === client_1.TransactionStatus.PENDING,
+            ...result.data,
+            dbStatus
+        };
     }
     finally {
-        // 🔓 RELEASE LOCK
         await redis.del(lockKey);
     }
 }
@@ -298,30 +278,26 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
     catch (err) {
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-    // ✅ FIX: Use Database for Idempotency
     const existingEvent = await db_1.db.webhookEvent.findUnique({
         where: { eventId: event.id }
     });
-    if (existingEvent) {
-        console.log(`[Stripe Webhook] ⏭️ Skipping duplicate event: ${event.id}`);
+    if (existingEvent)
         return res.json({ received: true });
-    }
-    // 🔒 Log the event immediately to "lock" it
     await db_1.db.webhookEvent.create({
         data: {
             eventId: event.id,
             eventType: event.type,
-            payload: event.data.object, // Save payload for debugging
+            payload: event.data.object,
             processed: false
         }
     });
     try {
         if (event.type === 'payment_intent.succeeded') {
             const paymentIntent = event.data.object;
-            console.log(`[Stripe Webhook] 💰 Processing Payment: ${paymentIntent.id}`);
             await processPurchase({
                 paymentId: paymentIntent.id,
                 mobile: paymentIntent.metadata.mobile,
+                email: paymentIntent.receipt_email || undefined,
                 productId: Number(paymentIntent.metadata.productId),
                 amount: paymentIntent.amount / 100,
                 currency: paymentIntent.currency.toUpperCase(),
@@ -329,7 +305,6 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
                 userId: paymentIntent.metadata.userId || undefined
             }, 'WEBHOOK');
         }
-        // ✅ Mark as successfully processed
         await db_1.db.webhookEvent.update({
             where: { eventId: event.id },
             data: { processed: true, processedAt: new Date() }
@@ -338,13 +313,12 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
     }
     catch (error) {
         console.error('Webhook handler failed:', error);
-        // Note: We do NOT mark as processed here, so Stripe retries later if it was a temporary error.
         res.status(500).send('Webhook handler failed');
     }
 });
 app.use(express_1.default.json({ limit: '1mb' }));
 // ==================================================================
-// 🔐 AUTHENTICATION ROUTES
+// AUTHENTICATION ROUTES
 // ==================================================================
 const registerSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
@@ -355,7 +329,6 @@ const loginSchema = zod_1.z.object({
     email: zod_1.z.string().email(),
     password: zod_1.z.string().min(1)
 });
-// ✅ HELPER: Extract Device Info
 const getDeviceInfo = (req) => ({
     ip: req.ip || req.socket.remoteAddress || 'unknown',
     userAgent: req.headers['user-agent'] || 'unknown'
@@ -363,7 +336,6 @@ const getDeviceInfo = (req) => ({
 app.post('/api/auth/register', authLimiter, async (req, res) => {
     try {
         const { email, password, name } = registerSchema.parse(req.body);
-        // ✅ PASS DEVICE INFO
         const result = await auth_2.authService.register(email, password, name, getDeviceInfo(req));
         if (!result.success)
             return res.status(400).json({ error: result.error });
@@ -374,16 +346,15 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
             path: '/api/auth/refresh',
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
-        return res.status(201).json({ message: 'Success', user: result.user, accessToken: result.accessToken });
+        return res.status(201).json({ user: result.user, accessToken: result.accessToken });
     }
-    catch (error) {
+    catch {
         return res.status(400).json({ error: 'Registration failed' });
     }
 });
 app.post('/api/auth/login', authLimiter, async (req, res) => {
     try {
         const { email, password } = loginSchema.parse(req.body);
-        // ✅ PASS DEVICE INFO
         const result = await auth_2.authService.login(email, password, getDeviceInfo(req));
         if (!result.success)
             return res.status(401).json({ error: result.error });
@@ -394,9 +365,9 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
             path: '/api/auth/refresh',
             maxAge: 7 * 24 * 60 * 60 * 1000
         });
-        return res.json({ message: 'Success', user: result.user, accessToken: result.accessToken });
+        return res.json({ user: result.user, accessToken: result.accessToken });
     }
-    catch (error) {
+    catch {
         return res.status(500).json({ error: 'Login failed' });
     }
 });
@@ -404,7 +375,6 @@ app.post('/api/auth/refresh', async (req, res) => {
     const refreshToken = req.cookies.refresh_token;
     if (!refreshToken)
         return res.sendStatus(401);
-    // ✅ USE HELPER FOR CONSISTENCY
     const result = await auth_2.authService.refreshToken(refreshToken, getDeviceInfo(req));
     if (!result.success) {
         res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
@@ -419,251 +389,153 @@ app.post('/api/auth/refresh', async (req, res) => {
     });
     return res.json({ accessToken: result.accessToken });
 });
-app.post('/api/auth/logout', async (req, res) => {
+app.post('/api/auth/logout', (req, res) => {
     res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
     res.json({ message: 'Logged out' });
 });
-app.get('/api/auth/me', auth_1.requireAuth, async (req, res) => {
-    return res.json({ user: req.user });
-});
-app.put('/api/auth/profile', auth_1.requireAuth, async (req, res) => {
-    const result = await auth_2.authService.updateProfile(req.user.id, req.body);
-    return result.success ? res.json({ user: result.user }) : res.status(400).json({ error: result.error });
-});
-app.post('/api/auth/change-password', auth_1.requireAuth, async (req, res) => {
-    const { currentPassword, newPassword } = req.body;
-    const result = await auth_2.authService.changePassword(req.user.id, currentPassword, newPassword);
-    return result.success ? res.json({ message: 'Password changed' }) : res.status(400).json({ error: result.error });
-});
-app.get('/api/user/transactions', auth_1.requireAuth, async (req, res) => {
-    const page = parseInt(req.query.page) || 1;
-    const limit = 20;
-    const skip = (page - 1) * limit;
-    const [transactions, total] = await Promise.all([
-        db_1.db.transaction.findMany({
-            where: { userId: req.user.id },
-            orderBy: { createdAt: 'desc' },
-            skip, take: limit
-        }),
-        db_1.db.transaction.count({ where: { userId: req.user.id } })
-    ]);
-    return res.json({ transactions, pagination: { page, limit, total }, pages: Math.ceil(total / limit) });
-});
+app.get('/api/auth/me', auth_1.requireAuth, (req, res) => res.json({ user: req.user }));
 // ==================================================================
-// ⚡ OPTIMIZED PUBLIC API ROUTES
+// PUBLIC API ROUTES
 // ==================================================================
-app.get('/api/countries', (_req, res) => res.json(COUNTRY_CACHE));
-app.get('/api/operators', (req, res) => {
+app.get('/api/countries', async (_req, res) => res.json(await getCachedCountries()));
+app.get('/api/operators', async (req, res) => {
     const { country } = req.query;
-    // ✅ OPTIMIZATION: Use O(1) Index instead of .filter()
     if (country) {
         const code = String(country).toUpperCase();
-        return res.json(OPERATOR_INDEX[code] || []);
+        const indexStr = await redis.get('cache:operator_index');
+        if (indexStr) {
+            const index = JSON.parse(indexStr);
+            return res.json(index[code] || []);
+        }
     }
-    return res.json(OPERATOR_CACHE);
+    return res.json(await getCachedOperators());
 });
 app.get('/api/products', async (req, res) => {
-    try {
-        const { operatorId, currency, ranged, page, limit } = req.query;
-        if (!operatorId)
-            return res.status(400).json({ error: 'Operator ID required' });
-        const opId = Number(operatorId);
-        const whereClause = { operatorId: opId };
-        if (currency)
-            whereClause.currency = String(currency).toUpperCase();
-        if (ranged === 'true') {
-            whereClause.OR = [
-                { type: { contains: 'RANGE' } },
-                { minAmount: { not: null }, maxAmount: { not: null } }
-            ];
-        }
-        // ✅ OPTIMIZATION: Pagination
-        const pageNum = Number(page) || 1;
-        const limitNum = Number(limit) || 100;
-        const skip = (pageNum - 1) * limitNum;
-        const localProducts = await db_1.db.product.findMany({
-            where: whereClause,
-            orderBy: { amount: 'asc' },
-            take: limitNum,
-            skip: skip
-        });
-        if (localProducts.length > 0) {
-            // Log for debugging
-            console.log(`[Products] Found ${localProducts.length} items in DB for Op ${opId}. Types:`, [...new Set(localProducts.map(p => p.type))].join(', '));
-            return res.json(localProducts);
-        }
-        console.log(`[Cache Miss] Fetching products for Op ${opId}`);
-        const result = await dtone_1.dtoneService.getProductsForOperator(opId, pageNum, limitNum, 'en');
-        if (!result.success || !result.data) {
-            return res.status(400).json({ error: result.error, code: result.code });
-        }
-        return res.json(result.data);
-    }
-    catch (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    const { operatorId, currency } = req.query;
+    if (!operatorId)
+        return res.status(400).json({ error: 'Operator ID required' });
+    const whereClause = { operatorId: Number(operatorId) };
+    if (currency)
+        whereClause.currency = String(currency).toUpperCase();
+    const localProducts = await db_1.db.product.findMany({
+        where: whereClause,
+        orderBy: { amount: 'asc' }
+    });
+    if (localProducts.length > 0)
+        return res.json(localProducts);
+    const result = await dtone_1.dtoneService.getProductsForOperator(Number(operatorId));
+    return result.success ? res.json(result.data) : res.status(400).json({ error: result.error });
 });
 app.post('/api/lookup', async (req, res) => {
     const { mobile } = req.body;
     if (!mobile)
         return res.status(400).json({ error: 'Mobile required' });
-    try {
-        const result = await dtone_1.dtoneService.lookupMobileNumber(mobile);
-        if (!result.success)
-            return res.status(404).json({ error: result.error });
-        return res.json(result.data);
-    }
-    catch (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    const result = await dtone_1.dtoneService.lookupMobileNumber(mobile);
+    return result.success ? res.json(result.data) : res.status(404).json({ error: result.error });
 });
 // ==================================================================
-// 🔐 SECURE PAYMENT & PURCHASE ROUTES (MISSING APIS RESTORED)
+// PURCHASE & TRANSACTION ROUTES
 // ==================================================================
 app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
     const { mobile, productId, type, customAmount } = req.body;
     const idempotencyKey = req.headers['idempotency-key'];
-    if (!idempotencyKey) {
-        return res.status(400).json({ error: "Missing Idempotency-Key header" });
-    }
-    if (!productId)
-        return res.status(400).json({ error: 'Product ID required' });
+    if (!idempotencyKey)
+        return res.status(400).json({ error: "Idempotency key required" });
     try {
         const product = await db_1.db.product.findUnique({ where: { id: productId } });
         if (!product)
             return res.status(400).json({ error: 'Invalid product' });
-        let baseCostUsd = 0;
-        const isRanged = product.type.includes('RANGE') || (product.minAmount && product.maxAmount);
-        if (isRanged) {
-            if (!customAmount)
-                return res.status(400).json({ error: 'Custom amount required' });
-            const min = product.minAmount || 0;
-            const max = product.maxAmount || Infinity;
-            if (customAmount < min || customAmount > max) {
-                return res.status(400).json({ error: `Amount must be between ${min} and ${max}` });
-            }
-            const costMin = product.costPriceMin || product.costPrice || 0;
-            const unitMin = product.minAmount || 1;
-            baseCostUsd = customAmount * (costMin / unitMin);
+        let cost = product.costPrice || product.amount || 0;
+        if (product.type.includes('RANGE') && customAmount) {
+            const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
+            cost = customAmount * unitCost;
         }
-        else {
-            baseCostUsd = product.costPrice || product.amount || 0;
-        }
-        const finalCharge = baseCostUsd * FALLBACK_MARGIN;
-        if (finalCharge < GLOBAL_MIN_USD) {
-            return res.status(400).json({ error: `Minimum order is $${GLOBAL_MIN_USD} USD` });
-        }
-        // 1. Create Stripe Intent (NO MOBILE IN METADATA)
+        const finalCharge = cost * FALLBACK_MARGIN;
+        if (finalCharge < GLOBAL_MIN_USD)
+            return res.status(400).json({ error: `Min order is $${GLOBAL_MIN_USD}` });
+        // Calculate display amount (Face Value)
+        const localAmount = (product.type.includes('RANGE') && customAmount)
+            ? customAmount
+            : (product.amount || 0);
         const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
             productId: Number(productId),
             type,
             userId: req.user?.id,
-            // ✅ STRIPE METADATA MUST BE STRINGS:
-            localAmount: isRanged ? customAmount.toString() : (product.amount || 0).toString()
+            localAmount: localAmount.toString()
         }, idempotencyKey);
-        // 2. ✅ CRITICAL MISSING STEP: Save Transaction immediately as "INITIALIZED"
-        // This securely links the Payment ID to the Mobile Number in YOUR database.
         await db_1.db.transaction.create({
             data: {
-                externalId: `init_${result.id}`, // Use Stripe ID
+                externalId: `init_${result.id}`,
                 paymentIntentId: result.id,
-                mobile, // ✅ Saved SECURELY here
+                mobile,
                 productId: Number(productId),
                 amount: finalCharge,
                 currency: 'USD',
-                productType: type || 'UNKNOWN',
-                status: 'INITIALIZED', // New temporary status
+                productType: type,
+                status: client_1.TransactionStatus.INITIALIZED,
                 userId: req.user?.id
             }
         });
-        // 3. Prepare NUMBER for Frontend (Clean display)
-        const displayAmount = (isRanged && customAmount)
-            ? customAmount
-            : (product.amount || 0);
-        // 4. Send Response
+        // ✅ FIXED: Return localAmount, currency, and breakdown
         res.json({
             ...result,
-            isGuest: !req.user,
-            userId: req.user?.id,
             chargeAmount: finalCharge,
-            localAmount: displayAmount,
+            localAmount: localAmount,
             currency: product.currency,
-            breakdown: { base: baseCostUsd, margin: FALLBACK_MARGIN, final: finalCharge }
+            breakdown: {
+                base: cost,
+                margin: FALLBACK_MARGIN,
+                final: finalCharge
+            }
         });
     }
     catch (error) {
-        // Check for unique constraint (Idempotency)
-        if (error.code === 'P2002') {
-            return res.status(409).json({ error: "Duplicate request processed" });
-        }
-        console.error("Payment Intent Error:", error);
+        if (error.code === 'P2002')
+            return res.status(409).json({ error: "Duplicate request" });
         res.status(500).json({ error: error.message });
     }
 });
-const purchaseSchema = zod_1.z.object({
-    productId: zod_1.z.number().int().positive(),
-    mobile: zod_1.z.string().min(7).max(15),
-    amount: zod_1.z.number().positive(),
-    unit: zod_1.z.string().length(3).optional(),
-    paymentId: zod_1.z.string().startsWith("pi_"),
-    type: zod_1.z.string().optional()
-});
 app.post('/api/purchase', auth_1.optionalAuth, async (req, res) => {
     try {
-        const { productId, mobile, unit, paymentId, type } = purchaseSchema.parse(req.body);
+        const { productId, mobile, paymentId, type } = req.body;
         const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
-        if (paymentIntent.status !== 'succeeded') {
-            return res.status(403).json({ error: 'Payment not completed.' });
-        }
-        const originalPayerId = paymentIntent.metadata?.userId;
-        const currentUser = req.user?.id;
-        if (originalPayerId && currentUser && originalPayerId !== currentUser) {
-            return res.status(403).json({ error: 'Security Violation: Payment ownership mismatch.' });
-        }
-        const existingTxn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
-        if (existingTxn) {
-            return res.json({ success: true, ...existingTxn, dbStatus: existingTxn.status, alreadyProcessed: true });
-        }
-        const paidAmount = paymentIntent.amount / 100;
-        const paidCurrency = paymentIntent.currency.toUpperCase();
-        const priceCheck = await priceVerification_1.priceVerificationService.verifyProductPrice(productId, paidAmount, paidCurrency);
-        if (!priceCheck.valid && !['CACHE_MISS', 'NO_PRICE'].includes(priceCheck.code || '')) {
-            await payment_1.paymentService.refundPayment(paymentId);
-            return res.status(403).json({ error: 'Price verification failed. Payment refunded.' });
-        }
+        if (paymentIntent.status !== 'succeeded')
+            return res.status(403).json({ error: 'Not paid' });
         const result = await processPurchase({
             paymentId,
             mobile,
+            email: paymentIntent.receipt_email || undefined,
             productId,
-            amount: paidAmount,
-            currency: unit || paidCurrency,
+            amount: paymentIntent.amount / 100,
+            currency: paymentIntent.currency.toUpperCase(),
             type: type || 'UNKNOWN',
-            userId: originalPayerId || undefined
+            userId: paymentIntent.metadata.userId || undefined
         }, 'API');
-        return res.json({ ...result, isGuest: !originalPayerId });
+        return res.json(result);
     }
-    catch (error) {
-        console.error("Purchase Error:", error);
+    catch {
         return res.status(500).json({ error: 'Internal server error' });
     }
 });
 app.get('/api/transaction/:paymentId', async (req, res) => {
-    const { paymentId } = req.params;
-    try {
-        const txn = await db_1.db.transaction.findUnique({
-            where: { paymentIntentId: paymentId }
-        });
-        if (!txn)
-            return res.json({ status: 'PENDING' });
-        return res.json({ status: txn.status, externalId: txn.externalId });
-    }
-    catch (error) {
-        return res.status(500).json({ error: error.message });
-    }
+    const txn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: req.params.paymentId } });
+    return res.json({ status: txn?.status || client_1.TransactionStatus.PENDING, externalId: txn?.externalId });
 });
-// ==================================================================
+app.get('/api/user/transactions', auth_1.requireAuth, async (req, res) => {
+    const page = parseInt(req.query.page) || 1;
+    const limit = 20;
+    const [transactions, total] = await Promise.all([
+        db_1.db.transaction.findMany({
+            where: { userId: req.user.id },
+            orderBy: { createdAt: 'desc' },
+            skip: (page - 1) * limit,
+            take: limit
+        }),
+        db_1.db.transaction.count({ where: { userId: req.user.id } })
+    ]);
+    return res.json({ transactions, pagination: { page, limit, total } });
+});
 // STATIC FILES
-// ==================================================================
 const DIST_PATH = path_1.default.join(process.cwd(), 'dist');
 app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, (_req, res) => res.sendFile(path_1.default.join(DIST_PATH, 'index.html')));

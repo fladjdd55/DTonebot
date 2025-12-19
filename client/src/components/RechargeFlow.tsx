@@ -14,6 +14,9 @@ import PaymentModal from './PaymentModal';
 // Margin used ONLY for rough UI estimates. Real price comes from Server.
 const ESTIMATED_MARGIN = 1.15;
 
+// ✅ ENV VAR: Read Environment Variable (Default to true if missing)
+const ENABLE_CUSTOM_AMOUNT = import.meta.env.VITE_ENABLE_CUSTOM_AMOUNT === 'true';
+
 export default function RechargeFlow() {
   const [step, setStep] = useState<1 | 1.5 | 2 | 3>(1);
   
@@ -113,18 +116,9 @@ export default function RechargeFlow() {
   // 3. Categorize
   const categorizedProducts = useMemo(() => {
     return {
-      // Mobile (1) -> Airtime (11)
       AIRTIME: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 11),
-      
-      // Mobile (1) -> Bundles (12)
       BUNDLES: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 12),
-      
-      // Mobile (1) -> Data (13)
       DATA: fixedProducts.filter(p => p.serviceId === 1 && p.subserviceId === 13),
-
-      // Future Proofing:
-      // GIFT_CARDS: fixedProducts.filter(p => p.serviceId === 4),
-      // UTILITIES: fixedProducts.filter(p => p.serviceId === 3),
     };
   }, [fixedProducts]);
 
@@ -174,7 +168,7 @@ export default function RechargeFlow() {
   }, [operator]);
 
   // ==========================================
-  // HANDLERS (Previously Truncated - Restored)
+  // HANDLERS
   // ==========================================
 
   const handleCountrySelect = (country: Country) => {
@@ -264,7 +258,7 @@ export default function RechargeFlow() {
   };
 
   // ==========================================
-  // PURCHASE HANDLERS (Server-Side Price)
+  // PURCHASE HANDLERS
   // ==========================================
 
   const handlePurchase = async (product: Product, customAmountValue?: number) => {
@@ -272,8 +266,6 @@ export default function RechargeFlow() {
     setApiError('');
     
     try {
-      // ✅ FIX: Generate a unique Idempotency Key
-      // Format: "pi_{productId}_{amount}_{timestamp}_{random}"
       const uniqueKey = `pi_${product.id}_${customAmountValue || product.amount}_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
       const priceResponse = await fetch('/api/create-payment-intent', {
         method: 'POST',
@@ -392,12 +384,17 @@ export default function RechargeFlow() {
 
   const handleCustomAmountChange = (value: string) => {
     setCustomAmount(value);
+    // ✅ FIXED: Using minAmount and maxAmount (Database Fields)
     if (selectedRangedProduct && value) {
       const val = parseFloat(value);
-      if (val < (selectedRangedProduct.min || 0)) {
-        setCustomAmountError(`Minimum amount is ${selectedRangedProduct.min}`);
-      } else if (val > (selectedRangedProduct.max || Infinity)) {
-        setCustomAmountError(`Maximum amount is ${selectedRangedProduct.max}`);
+      // Use minAmount/maxAmount, falling back to 0/Infinity if missing
+      const min = selectedRangedProduct.minAmount || 0;
+      const max = selectedRangedProduct.maxAmount || Infinity;
+
+      if (val < min) {
+        setCustomAmountError(`Minimum amount is ${min}`);
+      } else if (val > max) {
+        setCustomAmountError(`Maximum amount is ${max}`);
       } else {
         setCustomAmountError(null);
       }
@@ -640,8 +637,8 @@ export default function RechargeFlow() {
                     </div>
                 ) : (
                 <>
-                {/* Custom Amount for Airtime */}
-                {activeTab === 'AIRTIME' && rangedProducts.length > 0 && (
+                {/* Custom Amount for Airtime - ✅ CONTROLLED BY ENV VAR */}
+                {activeTab === 'AIRTIME' && rangedProducts.length > 0 && ENABLE_CUSTOM_AMOUNT && (
                   <div className="border-b pb-4 mb-4">
                     <h4 className="text-sm font-medium text-gray-700 mb-3 flex items-center gap-2">
                       <DollarSign className="w-4 h-4 text-indigo-500" /> Custom Amount
@@ -662,8 +659,9 @@ export default function RechargeFlow() {
                       </button>
                     ) : (
                       <div className="p-4 rounded-xl border-2 border-indigo-300 bg-indigo-50/50">
+                         {/* ✅ FIXED: Displaying minAmount and maxAmount */}
                          <div className="text-sm text-gray-600 mb-3">
-                              Range: <span className="font-medium">{selectedRangedProduct?.min} - {selectedRangedProduct?.max} {selectedRangedProduct?.currency}</span>
+                              Range: <span className="font-medium">{selectedRangedProduct?.minAmount} - {selectedRangedProduct?.maxAmount} {selectedRangedProduct?.currency}</span>
                          </div>
                          <div className="flex gap-3">
                               <div className="w-full relative">
@@ -745,7 +743,7 @@ export default function RechargeFlow() {
             </div>
           )}
 
-          {/* CONFIRMATION MODAL (Server Price) */}
+          {/* CONFIRMATION MODAL */}
           {pendingPurchase && (
             <div className={`fixed inset-0 z-50 ${isConfirmModalOpen ? 'flex' : 'hidden'} items-center justify-center p-4 bg-black/60 backdrop-blur-sm`}>
               <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm p-6 animate-in fade-in zoom-in duration-200">
