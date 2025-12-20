@@ -3,6 +3,8 @@ import Stripe from 'stripe';
 import { db } from '../db';
 import { transactionService } from '../services/transactionService';
 import { TransactionStatus } from '@prisma/client';
+import { dtoneBasicAuth } from '../middleware/basicAuth';
+import { dtoneIpWhitelist } from '../middleware/ipWhitelist';
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
@@ -68,35 +70,40 @@ router.post('/stripe',
 );
 
 // DTONE WEBHOOK
-router.post('/dtone', express.json(), async (req: Request, res: Response): Promise<any> => {
-  console.log('🪝 [DTOne Webhook] Received:', JSON.stringify(req.body));
+router.post('/dtone', 
+  dtoneIpWhitelist,    // Check IP (if configured)
+  dtoneBasicAuth,      // Check Basic Auth
+  express.json(), 
+  async (req: Request, res: Response): Promise<any> => {
+    console.log('🪝 [DTOne Webhook] Received:', JSON.stringify(req.body));
 
-  const { external_id, status } = req.body;
+    const { external_id, status } = req.body;
 
-  if (!external_id || !status) {
-    return res.status(400).send('Invalid payload');
-  }
-
-  try {
-    const statusId = status.class?.id; // DTOne standard: 7 = Completed, 3/9 = Cancelled/Declined
-    let newStatus: TransactionStatus | undefined;
-
-    if (statusId === 7) newStatus = TransactionStatus.COMPLETED;
-    else if ([3, 9].includes(statusId)) newStatus = TransactionStatus.FAILED;
-
-    if (newStatus) {
-      await db.transaction.update({
-        where: { externalId: external_id },
-        data: { status: newStatus }
-      });
-      console.log(`✅ [DTOne Webhook] Updated ${external_id} to ${newStatus}`);
+    if (!external_id || !status) {
+      return res.status(400).send('Invalid payload');
     }
 
-    return res.status(200).send('OK');
-  } catch (err) {
-    console.error('❌ [DTOne Webhook] Error:', err);
-    return res.status(500).send('Error processing webhook');
+    try {
+      const statusId = status.class?.id;
+      let newStatus: TransactionStatus | undefined;
+
+      if (statusId === 7) newStatus = TransactionStatus.COMPLETED;
+      else if ([3, 9].includes(statusId)) newStatus = TransactionStatus.FAILED;
+
+      if (newStatus) {
+        await db.transaction.update({
+          where: { externalId: external_id },
+          data: { status: newStatus }
+        });
+        console.log(`✅ [DTOne Webhook] Updated ${external_id} to ${newStatus}`);
+      }
+
+      return res.status(200).send('OK');
+    } catch (err) {
+      console.error('❌ [DTOne Webhook] Error:', err);
+      return res.status(500).send('Error processing webhook');
+    }
   }
-});
+);
 
 export default router;

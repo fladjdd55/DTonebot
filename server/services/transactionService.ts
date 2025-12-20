@@ -1,6 +1,6 @@
 import { TransactionStatus } from '@prisma/client';
-import { db } from '../db'; // Adjust path if needed (e.g. ../../server/db) depending on tsconfig base
-import { getRedis } from './redis'; // Adjust path
+import { db } from '../db';
+import { getRedis } from './redis';
 import { dtoneService } from '../dtone';
 import { paymentService } from '../payment';
 import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
@@ -50,8 +50,19 @@ export const transactionService = {
   ): Promise<any> {
     const { paymentId, mobile, email, productId, amount, currency, type, userId } = data;
     const redis = getRedis();
-    const lockKey = `lock:purchase:${paymentId}`;
+    
+    // ✅ IDEMPOTENCY CHECK (Optimization)
+    // Check if this payment ID was already processed successfully in the last 24h.
+    // This prevents the "Lock Release Race" where Webhook grabs lock 1ms after API releases it.
+    const processedKey = `processed:${paymentId}`;
+    const alreadyProcessed = await redis.get(processedKey);
+    
+    if (alreadyProcessed) {
+      console.log(`[Purchase] ⏭️ Skipping ${paymentId} (Idempotency Key Found)`);
+      return { success: true, dbStatus: TransactionStatus.COMPLETED, alreadyProcessed: true };
+    }
 
+    const lockKey = `lock:purchase:${paymentId}`;
     const isLocked = await redis.set(lockKey, '1', 'EX', 15, 'NX');
     if (!isLocked) {
       return { success: true, dbStatus: TransactionStatus.PENDING, alreadyProcessed: true };
@@ -77,6 +88,8 @@ export const transactionService = {
            });
         }
         else if (existing.status === TransactionStatus.COMPLETED) {
+          // ✅ Self-Healing: If DB is complete but Redis key expired/missing, restore it.
+          await redis.set(processedKey, '1', 'EX', 86400); 
           return { success: true, ...existing, dbStatus: TransactionStatus.COMPLETED, alreadyProcessed: true };
         }
         else if (
@@ -84,6 +97,7 @@ export const transactionService = {
           existing.status === TransactionStatus.REFUNDED || 
           existing.status === TransactionStatus.REFUND_FAILED
         ) {
+          await redis.set(processedKey, '1', 'EX', 86400); // Mark failed as processed so we don't retry blindly
           return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
         }
         else if (existing.status === TransactionStatus.PENDING) {
@@ -141,6 +155,9 @@ export const transactionService = {
           where: { paymentIntentId: paymentId },
           data: { status: failStatus, externalId: `failed_${paymentId}` }
         });
+        
+        // ✅ Mark as processed (even if failed) so we don't retry automatically without intervention
+        await redis.set(processedKey, '1', 'EX', 86400);
 
         return { success: false, error: result.error, code: result.code, refunded: !!refund };
       }
@@ -161,6 +178,9 @@ export const transactionService = {
         where: { paymentIntentId: paymentId },
         data: { status: dbStatus, externalId: result.data.externalId }
       });
+
+      // ✅ SUCCESS: Mark this payment ID as processed for 24 hours
+      await redis.set(processedKey, '1', 'EX', 86400);
 
       if (userId) {
         await db.auditLog.create({

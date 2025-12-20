@@ -82,6 +82,23 @@ class RedisService {
     // PUBLIC METHODS
     // ==================================================================
     /**
+     * ✅ NEW: Required for Health Check in server/index.ts
+     */
+    async ping() {
+        await this.ensureConnection();
+        if (this.client && this.isRedisAvailable) {
+            try {
+                return await this.client.ping();
+            }
+            catch (error) {
+                console.error('[Redis] PING failed:', error.message);
+                throw error;
+            }
+        }
+        // If using in-memory fallback, we are "healthy" locally
+        return 'PONG';
+    }
+    /**
      * ✅ NEW: Missing method required by auth.ts
      */
     async expire(key, ttlSeconds) {

@@ -11,6 +11,10 @@ export declare class RedisService {
     private initialize;
     private setupFallbackCleanup;
     /**
+     * ✅ NEW: Required for Health Check in server/index.ts
+     */
+    ping(): Promise<string>;
+    /**
      * ✅ NEW: Missing method required by auth.ts
      */
     expire(key: string, ttlSeconds: number): Promise<boolean>;

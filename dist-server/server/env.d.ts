@@ -1,0 +1,27 @@
+export declare const env: {
+    NODE_ENV: "development" | "production" | "test";
+    PORT: string;
+    ALLOWED_ORIGINS: string[];
+    DATABASE_URL: string;
+    JWT_SECRET: string;
+    JWT_EXPIRES_IN: string;
+    DTONE_API_KEY: string;
+    DTONE_API_SECRET: string;
+    DTONE_MODE: "production" | "sandbox";
+    VITE_MIN_USD_ORDER: number;
+    DTONE_FALLBACK_MARGIN: number;
+    DTONE_WEBHOOK_USER: string;
+    DTONE_WEBHOOK_PASS: string;
+    DTONE_WHITELIST_IPS: string[];
+    STRIPE_SECRET_KEY: string;
+    STRIPE_WEBHOOK_SECRET: string;
+    VITE_STRIPE_PUBLISHABLE_KEY: string;
+    SYNC_ON_STARTUP: boolean;
+    VITE_API_URL?: string | undefined;
+    REDIS_URL?: string | undefined;
+    REFRESH_TOKEN_ENCRYPTION_KEY?: string | undefined;
+    DTONE_CALLBACK_URL?: string | undefined;
+    TELEGRAM_BOT_TOKEN?: string | undefined;
+    TELEGRAM_APP_URL?: string | undefined;
+    ADMIN_WEBHOOK_URL?: string | undefined;
+};

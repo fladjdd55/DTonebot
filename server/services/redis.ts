@@ -10,16 +10,11 @@ export class RedisService {
   private initializationPromise: Promise<void> | null = null;
 
   constructor() {
-    // Removed automatic initialize() to allow lazy loading
+    // Lazy load on first usage
   }
 
-  /**
-   * Ensures Redis is connected before performing operations
-   */
   private async ensureConnection() {
     if (this.client || this.isRedisAvailable) return;
-    
-    // Prevent multiple simultaneous connection attempts
     if (!this.initializationPromise) {
       this.initializationPromise = this.initialize();
     }
@@ -47,8 +42,9 @@ export class RedisService {
           return Math.min(times * 100, 2000);
         },
         reconnectOnError: (err) => {
-          console.error('[Redis] ⚠️ Connection error:', err.message);
-          return true;
+          // Only reconnect on specific errors to avoid loops
+          if (err.message.includes('READONLY')) return true;
+          return false;
         }
       });
 
@@ -62,10 +58,8 @@ export class RedisService {
         console.error('[Redis] ❌ Error:', err.message);
       });
 
-      // Wait for the connection to be ready (optional, but good for first hit)
       await new Promise<void>((resolve) => {
         this.client?.once('connect', () => resolve());
-        // Don't block forever if it fails
         setTimeout(resolve, 2000); 
       });
 
@@ -79,9 +73,7 @@ export class RedisService {
     setInterval(() => {
       const now = Date.now();
       for (const [key, data] of this.fallbackCache.entries()) {
-        if (data.expires < now) {
-          this.fallbackCache.delete(key);
-        }
+        if (data.expires < now) this.fallbackCache.delete(key);
       }
     }, 5 * 60 * 1000);
   }
@@ -90,25 +82,22 @@ export class RedisService {
   // PUBLIC METHODS
   // ==================================================================
 
-  /**
-   * ✅ NEW: Missing method required by auth.ts
-   */
   async expire(key: string, ttlSeconds: number): Promise<boolean> {
     await this.ensureConnection();
-    
+    const ttl = Math.ceil(ttlSeconds); // ✅ Safety: Ensure Integer
+
     if (this.client && this.isRedisAvailable) {
       try {
-        const result = await this.client.expire(key, ttlSeconds);
+        const result = await this.client.expire(key, ttl);
         return result === 1;
       } catch (error: any) {
         console.error('[Redis] EXPIRE failed:', error.message);
       }
     }
     
-    // Fallback logic
     const cached = this.fallbackCache.get(key);
     if (cached) {
-      cached.expires = Date.now() + (ttlSeconds * 1000);
+      cached.expires = Date.now() + (ttl * 1000);
       return true;
     }
     return false;
@@ -132,40 +121,70 @@ export class RedisService {
     return null;
   }
 
+  /**
+   * Fixed set method to handle all overloaded signatures correctly.
+   */
   async set(
     key: string, 
     value: string, 
-    arg3: number | string, 
+    arg3?: number | string, 
     arg4?: number, 
     arg5?: string
   ): Promise<string | null> {
     await this.ensureConnection();
     
-    const isAtomicLock = typeof arg3 === 'string' && arg3 === 'EX' && arg5 === 'NX';
-    const ttlSeconds = isAtomicLock ? arg4 : (arg3 as number);
+    // Normalize Arguments
+    let ttl: number | undefined;
+    let isAtomic = false; // For NX
+    let isStandardEx = false; // For EX without NX
+
+    // Case 1: set(key, val, ttl) -> setex
+    if (typeof arg3 === 'number') {
+      ttl = arg3;
+    } 
+    // Case 2: set(key, val, 'EX', ttl) OR set(key, val, 'EX', ttl, 'NX')
+    else if (typeof arg3 === 'string' && arg3 === 'EX' && typeof arg4 === 'number') {
+      ttl = arg4;
+      if (arg5 === 'NX') isAtomic = true;
+      else isStandardEx = true;
+    }
+
+    // ✅ Safety: Redis requires integer TTLs
+    if (ttl !== undefined) ttl = Math.ceil(ttl);
 
     if (this.client && this.isRedisAvailable) {
       try {
-        if (isAtomicLock && ttlSeconds) {
-           return await this.client.set(key, value, 'EX', ttlSeconds, 'NX');
+        if (isAtomic && ttl !== undefined) {
+           // Lock: set(key, val, 'EX', ttl, 'NX')
+           return await this.client.set(key, value, 'EX', ttl, 'NX');
         } 
-        if (ttlSeconds) {
-           await this.client.setex(key, ttlSeconds, value);
+        else if (isStandardEx && ttl !== undefined) {
+           // Idempotency: set(key, val, 'EX', ttl)
+           return await this.client.set(key, value, 'EX', ttl);
+        }
+        else if (ttl !== undefined) {
+           // Cache: set(key, val, ttl) -> setex
+           await this.client.setex(key, ttl, value);
            return 'OK';
+        }
+        else {
+           // Permanent: set(key, val)
+           return await this.client.set(key, value);
         }
       } catch (error: any) {
         console.error('[Redis] SET failed:', error.message);
       }
     }
 
-    if (isAtomicLock) {
+    // Fallback Implementation
+    if (isAtomic) {
        const existing = this.fallbackCache.get(key);
        if (existing && existing.expires > Date.now()) return null;
     }
 
     this.fallbackCache.set(key, {
       value,
-      expires: Date.now() + ((ttlSeconds || 0) * 1000)
+      expires: ttl ? Date.now() + (ttl * 1000) : Infinity
     });
     
     return 'OK';
@@ -173,7 +192,6 @@ export class RedisService {
 
   async del(key: string): Promise<void> {
     await this.ensureConnection();
-    
     if (this.client && this.isRedisAvailable) {
       try {
         await this.client.del(key);
@@ -186,17 +204,27 @@ export class RedisService {
   }
 
   async exists(key: string): Promise<boolean> {
+    // Optimized: Use GET so fallback logic is consistent
     const value = await this.get(key);
     return value !== null;
   }
 
+  async ping(): Promise<string> {
+    await this.ensureConnection();
+    if (this.client && this.isRedisAvailable) {
+      return await this.client.ping();
+    }
+    return 'PONG';
+  }
+
   async incr(key: string, ttlSeconds?: number): Promise<number> {
     await this.ensureConnection();
+    const ttl = ttlSeconds ? Math.ceil(ttlSeconds) : undefined;
 
     if (this.client && this.isRedisAvailable) {
       try {
         const value = await this.client.incr(key);
-        if (ttlSeconds) await this.client.expire(key, ttlSeconds);
+        if (ttl) await this.client.expire(key, ttl);
         return value;
       } catch (error: any) {
         console.error('[Redis] INCR failed:', error.message);
@@ -205,7 +233,8 @@ export class RedisService {
 
     const current = await this.get(key);
     const newValue = (parseInt(current || '0') + 1).toString();
-    await this.set(key, newValue, ttlSeconds || 3600);
+    // Use standard set, fallback handles it
+    await this.set(key, newValue, ttl || 3600); 
     return parseInt(newValue);
   }
 
@@ -217,9 +246,7 @@ export class RedisService {
   }
 }
 
-// Singleton
 let redisInstance: RedisService | null = null;
-
 export function getRedis(): RedisService {
   if (!redisInstance) {
     redisInstance = new RedisService();

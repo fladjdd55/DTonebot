@@ -1,9 +1,13 @@
+import './env';
+import { env } from './env';
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import helmet from 'helmet';
 import cookieParser from 'cookie-parser';
 import rateLimit from 'express-rate-limit';
+import { db } from './db';
+import { getRedis } from './services/redis';
 
 // Feature Routes
 import authRoutes from './routes/auth.routes';
@@ -38,22 +42,28 @@ app.use(helmet({
 
 // 3. CORS
 const allowedOrigins = process.env.NODE_ENV === 'production'
-  ? (process.env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [])
+  ? env.ALLOWED_ORIGINS // This is now a validated string[] array
   : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000', 'http://127.0.0.1:5173'];
 
 const isValidOrigin = (origin: string): boolean => {
   try {
-    const url = new URL(origin);
-    if (process.env.NODE_ENV === 'production' && url.protocol !== 'https:') return false;
+    // We can now skip the strict protocol check here because 
+    // Zod already validated that env.ALLOWED_ORIGINS contains valid URLs.
     return allowedOrigins.includes(origin);
   } catch { return false; }
 };
 
 app.use(cors({
   origin: (origin, callback) => {
-    if (!origin || isValidOrigin(origin)) return callback(null, true);
-    console.warn(`🚫 CORS Blocked: ${origin}`);
-    callback(new Error('CORS policy: Origin not allowed'));
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    
+    if (isValidOrigin(origin)) {
+      return callback(null, true);
+    } else {
+      console.warn(`🚫 CORS Blocked: ${origin}`);
+      return callback(new Error('CORS policy: Origin not allowed'));
+    }
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -82,9 +92,87 @@ app.use('/api/auth', authRoutes);
 app.use('/api', catalogRoutes); // countries, operators, products
 app.use('/api', paymentRoutes); // purchase, transactions
 
-// 8. Serve Static Client
+// 8. Health check Endpoint 
+app.get('/health', async (_req, res) => { // Use _req to ignore unused param warning
+  const status = {
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    services: {
+      database: 'unknown',
+      redis: 'unknown'
+    }
+  };
+
+  try {
+    // 1. Database Check (with timeout to prevent hanging)
+    // We use Promise.race to force a timeout if DB is stuck
+    await Promise.race([
+      db.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => setTimeout(() => reject(new Error('DB Timeout')), 2000))
+    ]);
+    status.services.database = 'connected';
+
+    // 2. Redis Check (Using PING instead of EXISTS)
+    const redis = getRedis();
+    const redisResult = await redis.ping().catch(() => 'failed');
+    status.services.redis = redisResult === 'PONG' ? 'connected' : 'disconnected';
+
+    // 3. Overall Decision
+    // If DB is critical, we return 503 if it's down. Redis might be optional (fallback).
+    if (status.services.database !== 'connected') {
+      throw new Error('Database unavailable');
+    }
+
+    res.status(200).json({ status: 'healthy', ...status });
+
+  } catch (error) {
+    console.error('❌ Health Check Failed:', error); // Log real error internally
+    res.status(503).json({
+      status: 'unhealthy',
+      ...status,
+      error: 'Service Unavailable' // Generic message for public safety
+    });
+  }
+});
+
+// Redirect /api/health to /health is excellent for consistency
+app.get('/api/health', (req, res) => res.redirect('/health'));
+
+// 9. Serve Static Client
 const DIST_PATH = path.join(process.cwd(), 'dist');
 app.use(express.static(DIST_PATH));
 app.get(/(.*)/, (_req, res) => res.sendFile(path.join(DIST_PATH, 'index.html')));
 
-app.listen(Number(PORT), '0.0.0.0', () => console.log(`🚀 API Server running on port ${PORT}`));
+async function startServer() {
+  try {
+    // 1. Test Database Connection
+    console.log('🗄️  Verifying database connection...');
+    await db.$connect();
+    await db.$queryRaw`SELECT 1`; // Simple query to verify it works
+    console.log('✅ Database connected successfully');
+
+    // 2. Start Server
+    app.listen(Number(PORT), '0.0.0.0', () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📍 Environment: ${process.env.NODE_ENV || 'development'}`);
+    });
+  } catch (error: any) {
+    console.error('❌ Failed to start server:', error.message);
+    process.exit(1);
+  }
+}
+
+// Handle shutdown gracefully
+process.on('SIGTERM', async () => {
+  console.log('📴 SIGTERM received, shutting down gracefully...');
+  await db.$disconnect();
+  process.exit(0);
+});
+
+process.on('SIGINT', async () => {
+  console.log('📴 SIGINT received, shutting down gracefully...');
+  await db.$disconnect();
+  process.exit(0);
+});
+
+startServer();

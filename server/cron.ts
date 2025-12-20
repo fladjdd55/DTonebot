@@ -1,13 +1,18 @@
+// server/cron.ts - ADD NEW CRON JOB
+
 import cron from 'node-cron';
 import { getRedis } from './services/redis';
 import { syncCountries } from './scripts/sync-countries';
 import { syncOperators } from './scripts/sync-operators';
 import { syncProducts } from './scripts/sync-products';
+import { db } from './db'; // ✅ ADD THIS
+import { TransactionStatus } from '@prisma/client'; // ✅ ADD THIS
 
 const redis = getRedis();
 const CACHE_TTL = 3600;
 
 export const startCronJobs = () => {
+  // Existing daily sync (keep as-is)
   cron.schedule('0 3 * * *', async () => {
     const lockKey = 'cron:daily_sync:lock';
     const acquired = await redis.set(lockKey, '1', 'EX', 600, 'NX');
@@ -37,6 +42,35 @@ export const startCronJobs = () => {
       console.log('[Scheduler] ✅ Daily Sync Completed');
     } catch (e) {
       console.error('[Scheduler] ❌ Daily Sync Failed', e);
+    } finally {
+      await redis.del(lockKey);
+    }
+  });
+
+  // ✅ FIX: NEW CRON - Cleanup old transactions (runs every 6 hours)
+  cron.schedule('0 */6 * * *', async () => {
+    const lockKey = 'cron:cleanup_transactions:lock';
+    const acquired = await redis.set(lockKey, '1', 'EX', 300, 'NX');
+    
+    if (!acquired) {
+      console.log('[Scheduler] ⏭️ Skipping Cleanup (Locked)');
+      return;
+    }
+
+    console.log('[Scheduler] 🧹 Cleaning up old transactions...');
+    try {
+      const oneDayAgo = new Date(Date.now() - 86400000); // 24 hours
+      
+      const result = await db.transaction.deleteMany({
+        where: {
+          status: TransactionStatus.INITIALIZED,
+          createdAt: { lt: oneDayAgo }
+        }
+      });
+      
+      console.log(`[Scheduler] ✅ Deleted ${result.count} old INITIALIZED transactions`);
+    } catch (e) {
+      console.error('[Scheduler] ❌ Cleanup Failed', e);
     } finally {
       await redis.del(lockKey);
     }
