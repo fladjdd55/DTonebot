@@ -6,11 +6,11 @@
     "fix:sdk": "npx ts-node -P tsconfig.server.json server/scripts/fix-sdk.ts",
     "sdk:refresh": "npx api install ... && npm run fix:sdk",
     "dev": "vite",
-    "dev:server": "ts-node -P tsconfig.server.json server/index.ts",
+    "dev:server": "ts-node -P tsconfig.server.json server/Routes.ts",
     "build": "tsc -b && vite build",
     "build:server": "tsc -p tsconfig.server.json",
     "build:all": "npm run build:server && npm run build",
-    "start": "node dist-server/server/index.js",
+    "start": "node dist-server/server/Routes.js",
     "lint": "eslint .",
     "preview": "vite preview"
   },
