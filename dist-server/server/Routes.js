@@ -3,7 +3,6 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-//
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
@@ -30,6 +29,7 @@ const redis = (0, redis_1.getRedis)();
 app.set('trust proxy', 1);
 const PORT = process.env.PORT || 5000;
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
+// ✅ FIX: Check multiple env var names to ensure we catch the value
 const GLOBAL_MIN_USD = Number(process.env.MIN_USD_ORDER ||
     process.env.VITE_MIN_USD_ORDER ||
     process.env.MIN_ORDER ||
@@ -69,25 +69,26 @@ async function getCachedOperators() {
     return fresh || [];
 }
 // ✅ HELPER: Calculate Safe Minimum Amount
-// This ensures the local 'minAmount' is high enough to meet the $5.00 USD limit
 function getSafeMinAmount(p) {
     let safeMin = p.minAmount || 0;
-    // Only check Ranged products that have valid cost data
-    if (p.type === 'RANGED_VALUE' && p.minAmount && (p.costPriceMin || p.costPrice)) {
+    // Only check Ranged products
+    if (p.type === 'RANGED_VALUE') {
+        // 1. Try to use cached cost price from DB
         const baseMinCost = p.costPriceMin || p.costPrice;
-        // Avoid division by zero
-        if (baseMinCost > 0) {
-            const costPerUnit = baseMinCost / p.minAmount;
-            // Formula: We need (Cost * Margin) >= GLOBAL_MIN_USD
-            // Therefore: Cost >= (GLOBAL_MIN_USD / Margin)
-            // Units * CostPerUnit >= TargetCost
-            // Units >= TargetCost / CostPerUnit
+        if (baseMinCost && baseMinCost > 0) {
+            const costPerUnit = baseMinCost / (p.minAmount || 1);
+            // Target: We need (Cost * Margin) >= GLOBAL_MIN_USD
             const targetCostUsd = GLOBAL_MIN_USD / FALLBACK_MARGIN;
             const requiredUnits = targetCostUsd / costPerUnit;
-            // If the required units to reach $5 are higher than operator's min, use ours
-            if (requiredUnits > p.minAmount) {
-                safeMin = Math.ceil(requiredUnits); // Round up to next whole number
+            if (requiredUnits > safeMin) {
+                safeMin = Math.ceil(requiredUnits);
             }
+        }
+        // 2. Fallback: If DB missing cost (Sync didn't run), assume 1-to-1 conversion roughly to prevent huge losses
+        else if (p.currency === 'USD') {
+            const targetUnits = GLOBAL_MIN_USD / FALLBACK_MARGIN;
+            if (targetUnits > safeMin)
+                safeMin = Math.ceil(targetUnits);
         }
     }
     return safeMin;
@@ -141,7 +142,7 @@ app.use((0, helmet_1.default)({
             scriptSrc: ["'self'", "'unsafe-inline'", "https://js.stripe.com"],
             frameSrc: ["https://js.stripe.com"],
             connectSrc: ["'self'", "https://api.stripe.com", "ws:", "wss:"],
-            imgSrc: ["'self'", "data:", "https:"]
+            imgSrc: ["'self'", "data:", "https:", "https://operator-logo.dtone.com"]
         }
     }
 }));
@@ -203,7 +204,12 @@ async function processPurchase(data, source = 'API') {
                 mobileToUse = existing.mobile;
                 await db_1.db.transaction.update({
                     where: { paymentIntentId: paymentId },
-                    data: { status: client_1.TransactionStatus.PENDING, externalId: `pending_${paymentId}`, processedVia: source }
+                    data: {
+                        status: client_1.TransactionStatus.PENDING,
+                        externalId: `pending_${paymentId}`,
+                        // ✅ FIX: Save who processed this (API or WEBHOOK)
+                        processedVia: source
+                    }
                 });
             }
             else if (existing.status === client_1.TransactionStatus.COMPLETED) {
@@ -235,7 +241,7 @@ async function processPurchase(data, source = 'API') {
                         currency,
                         productType: type,
                         status: client_1.TransactionStatus.PENDING,
-                        processedVia: source,
+                        processedVia: source, // ✅ FIX: Save source
                         userId: userId || null
                     }
                 });
@@ -248,6 +254,7 @@ async function processPurchase(data, source = 'API') {
                 throw err;
             }
         }
+        // Determine callback URL based on environment
         const callbackUrl = process.env.DTONE_CALLBACK_URL
             ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
             : undefined;
@@ -292,7 +299,7 @@ async function processPurchase(data, source = 'API') {
                         status: dbStatus
                     }
                 }
-            }).catch(console.error); // Don't fail transaction if log fails
+            }).catch(console.error);
         }
         return {
             success: dbStatus === client_1.TransactionStatus.COMPLETED || dbStatus === client_1.TransactionStatus.PENDING,
@@ -357,10 +364,11 @@ app.post('/api/hooks/stripe', express_1.default.raw({ type: 'application/json' }
         res.status(500).send('Webhook handler failed');
     }
 });
+// ✅ FIX: ADD DTONE WEBHOOK
 // ==================================================================
 // DTONE WEBHOOK (Handle async callbacks)
 // ==================================================================
-app.post('/api/hooks/dtone', async (req, res) => {
+app.post('/api/hooks/dtone', express_1.default.json(), async (req, res) => {
     console.log('🪝 [DTOne Webhook] Received:', JSON.stringify(req.body));
     const { external_id, status } = req.body;
     if (!external_id || !status) {
@@ -593,10 +601,10 @@ app.post('/api/create-payment-intent', auth_1.optionalAuth, async (req, res) => 
                 productType: type,
                 status: client_1.TransactionStatus.INITIALIZED,
                 userId: req.user?.id,
+                // ✅ FIX: Mark as started by API
                 processedVia: 'API'
             }
         });
-        // ✅ FIXED: Return localAmount, currency, and breakdown
         res.json({
             ...result,
             chargeAmount: finalCharge,
@@ -637,6 +645,7 @@ app.post('/api/purchase', auth_1.optionalAuth, async (req, res) => {
         return res.status(500).json({ error: 'Internal server error' });
     }
 });
+// ✅ FIX: UPDATED SELF-HEALING STATUS CHECK
 app.get('/api/transaction/:paymentId', async (req, res) => {
     try {
         const txn = await db_1.db.transaction.findUnique({ where: { paymentIntentId: req.params.paymentId } });
@@ -646,7 +655,7 @@ app.get('/api/transaction/:paymentId', async (req, res) => {
         if (txn.status === client_1.TransactionStatus.PENDING && txn.externalId.startsWith('txn_')) {
             const check = await dtone_1.dtoneService.getTransaction(txn.externalId);
             if (check.success && check.data) {
-                // 🔴 FIX: Explicitly type this variable so it can change values
+                // Explicitly type to avoid TS errors
                 let newStatus = txn.status;
                 const sid = check.data.statusId;
                 if (sid === 7)
