@@ -8,4 +8,4 @@ export const GLOBAL_MIN_USD = Number(
   5
 );
 
-export const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
+export const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.25;

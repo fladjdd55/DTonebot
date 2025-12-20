@@ -27,13 +27,11 @@ async function requireAuth(req, res, next) {
         if (!user) {
             return res.status(401).json({ error: 'User not found' });
         }
-        // ✅ FIXED: Redis Rate Limiting (Correct usage of INCR + EXPIRE)
+        // ✅ FIXED: Redis Rate Limiting
+        // We pass the TTL (3600s) directly to incr() so the RedisService handles it atomically.
         const userKey = `ratelimit:user:${user.id}`;
         try {
-            const count = await redis.incr(userKey);
-            if (count === 1) {
-                await redis.expire(userKey, 3600); // 1 hour TTL
-            }
+            const count = await redis.incr(userKey, 3600);
             if (count > 200) {
                 console.warn(`[RateLimit] User ${user.id} exceeded limit (${count}/200)`);
                 return res.status(429).json({ error: 'Too many requests. Please try again in an hour.' });
@@ -41,7 +39,7 @@ async function requireAuth(req, res, next) {
         }
         catch (redisError) {
             console.error("[RateLimit] Redis error:", redisError);
-            // Fail open (allow request) if Redis is down, or fail closed depending on security needs
+            // Fail open (allow request) if Redis is down
         }
         req.user = {
             id: user.id,

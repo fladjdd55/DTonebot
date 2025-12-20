@@ -26,6 +26,7 @@ export default function ConfirmationModal({
   totalCost
 }: ConfirmationModalProps) {
   const [logoError, setLogoError] = useState(false);
+  const logoUrl = `https://operator-logo.dtone.com/logo-${operatorId}-3.png`;
 
   if (!isOpen) return null;
 
@@ -53,8 +54,9 @@ export default function ConfirmationModal({
               {/* ✅ LOGIC: Show Logo if ID exists, else fallback to letter */}
               {operatorId && !logoError ? (
                 <img 
-                  src={`https://operator-logo.dtone.com/logo-${operatorId}-3.png`}
+                  src={logoUrl}
                   alt={operatorName}
+                  loading="lazy" 
                   className="w-full h-full object-contain p-1"
                   onError={() => setLogoError(true)}
                 />

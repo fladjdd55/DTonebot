@@ -43,7 +43,14 @@ exports.transactionService = {
         const alreadyProcessed = await redis.get(processedKey);
         if (alreadyProcessed) {
             console.log(`[Purchase] ⏭️ Skipping ${paymentId} (Idempotency Key Found)`);
-            return { success: true, dbStatus: client_1.TransactionStatus.COMPLETED, alreadyProcessed: true };
+            const existing = await db_1.db.transaction.findUnique({
+                where: { paymentIntentId: paymentId }
+            });
+            return {
+                success: existing?.status === client_1.TransactionStatus.COMPLETED,
+                dbStatus: existing?.status || client_1.TransactionStatus.PENDING,
+                alreadyProcessed: true
+            };
         }
         const lockKey = `lock:purchase:${paymentId}`;
         const isLocked = await redis.set(lockKey, '1', 'EX', 15, 'NX');

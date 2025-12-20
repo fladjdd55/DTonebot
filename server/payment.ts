@@ -83,9 +83,14 @@ export const paymentService = {
   async refundPayment(paymentIntentId: string) {
     try {
       console.log(`[Stripe] 💸 Attempting refund for ${paymentIntentId}...`);
+      const idempotencyKey = `refund_${paymentIntentId}_${Date.now()}`;
       const refund = await stripe.refunds.create({
         payment_intent: paymentIntentId,
-      });
+      },
+      {
+        idempotencyKey: idempotencyKey // ✅ CRITICAL: Prevents double refunds
+      }
+  );
       console.log(`[Stripe] ✅ Refund successful: ${refund.id}`);
       return refund;
     } catch (error: any) {
