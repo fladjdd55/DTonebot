@@ -139,7 +139,10 @@ router.get('/user/transactions', requireAuth, async (req: any, res: Response): P
       where: { userId: req.user!.id },
       orderBy: { createdAt: 'desc' },
       skip: (page - 1) * limit,
-      take: limit
+      take: limit,
+      include: {
+         product: { select: { name: true, currency: true } }
+      }
     }),
     db.transaction.count({ where: { userId: req.user!.id } })
   ]);

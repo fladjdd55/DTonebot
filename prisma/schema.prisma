@@ -7,10 +7,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ✅ FIXED: Enforcing statuses at the DB level
+// ✅ FIXED: Added PROCESSING to match your code logic
 enum TransactionStatus {
   INITIALIZED
   PENDING
+  PROCESSING
   COMPLETED
   FAILED
   REFUNDED
@@ -23,7 +24,7 @@ model User {
   passwordHash String
   name         String?
   phone        String?
-  deletedAt    DateTime? 
+  deletedAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   
@@ -40,14 +41,21 @@ model Transaction {
   externalId      String            @unique
   paymentIntentId String            @unique 
   mobile          String
-  email           String?           // ✅ FIXED: Added for guest purchase linking
+  email           String?
+  
+  // ✅ FIXED: Added missing relation to Product
   productId       Int
+  product         Product           @relation(fields: [productId], references: [id])
+
   amount          Float
   currency        String
   productType     String?
-  status          TransactionStatus @default(PENDING) // ✅ FIXED: Uses Enum
-  processedVia    String?           
+  status          TransactionStatus @default(PENDING)
+  processedVia    String?
   
+  // ✅ FIXED: Added missing field for DTOne ID
+  dtoneTransactionId String?
+
   userId          String?
   user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
   
@@ -74,13 +82,16 @@ model Product {
   amount        Float?
   minAmount     Float?
   maxAmount     Float?
-  benefits     String[]  @default([])
+  benefits      String[]  @default([])
   costPrice     Float?
   costPriceMin  Float?
   costPriceMax  Float?
   costCurrency  String?  @default("USD")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  
+  // Relation back to Transaction (Optional but good for completeness)
+  transactions  Transaction[]
   
   @@index([operatorId])
   @@index([currency])
@@ -97,6 +108,7 @@ model RefreshToken {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt DateTime
   revoked   Boolean  @default(false)
+  
   createdAt DateTime @default(now())
   
   @@index([userId])
@@ -131,3 +143,4 @@ model AuditLog {
   @@index([action])
   @@map("audit_logs")
 }
+

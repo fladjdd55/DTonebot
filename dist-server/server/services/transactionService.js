@@ -12,7 +12,7 @@ exports.transactionService = {
     getSafeMinAmount(p) {
         let safeMin = p.minAmount || 0;
         // Only check Ranged products
-        if (p.type === 'RANGED_VALUE') {
+        if (p.type === 'RANGED') {
             // 1. Try to use cached cost price from DB
             const baseMinCost = p.costPriceMin || p.costPrice;
             if (baseMinCost && baseMinCost > 0) {
