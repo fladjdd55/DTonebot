@@ -150,4 +150,41 @@ router.get('/user/transactions', auth_1.requireAuth, async (req, res) => {
     ]);
     return res.json({ transactions, pagination: { page, limit, total } });
 });
+router.post('/calculate-price', auth_1.requireAuth, async (req, res) => {
+    try {
+        const { productId, customAmount } = req.body;
+        const product = await db_1.db.product.findUnique({ where: { id: productId } });
+        if (!product)
+            return res.status(400).json({ error: 'Invalid product' });
+        // 1. Calculate Cost (Reuse logic from /create-payment-intent to keep prices consistent)
+        let cost = product.costPrice || product.amount || 0;
+        // Handle Ranged Products (Custom Amount)
+        if (product.type.includes('RANGE') && customAmount) {
+            const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
+            cost = customAmount * unitCost;
+        }
+        // 2. Apply Margin
+        const finalCharge = cost * config_1.FALLBACK_MARGIN;
+        // 3. Enforce Global Minimum
+        if (finalCharge < config_1.GLOBAL_MIN_USD) {
+            return res.status(400).json({ error: `Min order is $${config_1.GLOBAL_MIN_USD}` });
+        }
+        // 4. Determine Local Amount (what the user receives)
+        const localAmount = (product.type.includes('RANGE') && customAmount)
+            ? customAmount
+            : (product.amount || 0);
+        // ✅ FIX: Only send safe public data (No margins, no base costs)
+        const response = {
+            chargeAmount: finalCharge,
+            localAmount: localAmount,
+            currency: product.currency,
+            productName: product.name,
+        };
+        res.json(response);
+    }
+    catch (error) {
+        console.error('Price calculation failed:', error);
+        res.status(500).json({ error: 'Failed to calculate price' });
+    }
+});
 exports.default = router;

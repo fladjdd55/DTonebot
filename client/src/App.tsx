@@ -1,13 +1,22 @@
 import { useState } from 'react';
-// ✅ FIX: Added 'Phone' to imports
+import { Routes, Route } from 'react-router-dom';
 import { Home, Zap, History, User, MoreHorizontal, LogIn, Phone } from 'lucide-react';
+
 import RechargePage from './pages/dashboard/Recharge';
 import AuthModal from './components/auth/AuthModal';
 import ProfileSettings from './components/auth/ProfileSettings';
 import TransactionHistory from './components/auth/TransactionHistory';
 import { useAuth } from './contexts/AuthContext';
 
-// Simple "Page" placeholders for Home and More (You can expand these later)
+// Import New Pages
+import VerifyEmail from './pages/auth/VerifyEmail';
+import ForgotPassword from './pages/auth/ForgotPassword';
+import ResetPassword from './pages/auth/ResetPassword';
+
+// ==========================================
+// 🏠 DASHBOARD LAYOUT (Your existing App logic)
+// ==========================================
+
 const HomeView = ({ onTopupClick }: { onTopupClick: () => void }) => (
   <div className="p-6 space-y-6">
     <div className="bg-indigo-600 rounded-2xl p-6 text-white shadow-lg">
@@ -20,7 +29,6 @@ const HomeView = ({ onTopupClick }: { onTopupClick: () => void }) => (
         Start New Topup
       </button>
     </div>
-    
     <div className="grid grid-cols-2 gap-4">
       <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
         <div className="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center mb-3">
@@ -54,7 +62,6 @@ const MoreView = ({ onLogout, user }: { onLogout: () => void, user: any }) => (
         <span className="font-medium text-gray-700">Privacy Policy</span>
       </button>
     </div>
-
     {user && (
       <button 
         onClick={onLogout}
@@ -66,7 +73,7 @@ const MoreView = ({ onLogout, user }: { onLogout: () => void, user: any }) => (
   </div>
 );
 
-function App() {
+function Dashboard() {
   const { user, logout } = useAuth();
   
   // Navigation State
@@ -76,7 +83,6 @@ function App() {
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authView, setAuthView] = useState<'login' | 'register'>('login');
 
-  // Handle Tab Switching with Auth Protection
   const handleTabChange = (tab: typeof activeTab) => {
     if ((tab === 'history' || tab === 'profile') && !user) {
       setAuthView('login');
@@ -87,9 +93,8 @@ function App() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 pb-20"> {/* pb-20 prevents content from being hidden behind nav */}
-      
-      {/* HEADER (Simplified for Mobile) */}
+    <div className="min-h-screen bg-gray-50 pb-20"> 
+      {/* HEADER */}
       <header className="bg-white shadow-sm sticky top-0 z-30 safe-top">
         <div className="flex items-center justify-center h-14">
           <div className="flex items-center gap-2 text-indigo-600">
@@ -99,98 +104,54 @@ function App() {
         </div>
       </header>
 
-      {/* MAIN CONTENT AREA */}
+      {/* MAIN CONTENT */}
       <main className="max-w-md mx-auto min-h-[calc(100vh-140px)]">
-        
         {activeTab === 'home' && <HomeView onTopupClick={() => setActiveTab('topup')} />}
-        
-        {activeTab === 'topup' && (
-          <div className="px-4 py-6">
-            <RechargePage />
-          </div>
-        )}
-
-        {activeTab === 'history' && user && (
-          <TransactionHistory isOpen={true} onClose={() => setActiveTab('home')} />
-        )}
-
-        {activeTab === 'profile' && user && (
-           <ProfileSettings isOpen={true} onClose={() => setActiveTab('home')} />
-        )}
-
+        {activeTab === 'topup' && <div className="px-4 py-6"><RechargePage /></div>}
+        {activeTab === 'history' && user && <TransactionHistory isOpen={true} onClose={() => setActiveTab('home')} />}
+        {activeTab === 'profile' && user && <ProfileSettings isOpen={true} onClose={() => setActiveTab('home')} />}
         {activeTab === 'more' && <MoreView onLogout={logout} user={user} />}
-
       </main>
 
-      {/* FIXED BOTTOM NAVIGATION */}
+      {/* NAV */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 z-40 safe-bottom">
         <div className="flex justify-around items-center h-16 max-w-md mx-auto">
-          
-          <NavButton 
-            active={activeTab === 'home'} 
-            onClick={() => handleTabChange('home')} 
-            icon={<Home className="w-6 h-6" />} 
-            label="Home" 
-          />
-          
-          <NavButton 
-            active={activeTab === 'topup'} 
-            onClick={() => handleTabChange('topup')} 
-            icon={<Zap className="w-6 h-6" />} 
-            label="Topup" 
-          />
-          
-          <NavButton 
-            active={activeTab === 'history'} 
-            onClick={() => handleTabChange('history')} 
-            icon={<History className="w-6 h-6" />} 
-            label="History" 
-          />
-          
-          <NavButton 
-            active={activeTab === 'profile'} 
-            onClick={() => handleTabChange('profile')} 
-            icon={<User className="w-6 h-6" />} 
-            label="Profile" 
-          />
-
-          <NavButton 
-            active={activeTab === 'more'} 
-            onClick={() => handleTabChange('more')} 
-            icon={<MoreHorizontal className="w-6 h-6" />} 
-            label="More" 
-          />
-
+          <NavButton active={activeTab === 'home'} onClick={() => handleTabChange('home')} icon={<Home className="w-6 h-6" />} label="Home" />
+          <NavButton active={activeTab === 'topup'} onClick={() => handleTabChange('topup')} icon={<Zap className="w-6 h-6" />} label="Topup" />
+          <NavButton active={activeTab === 'history'} onClick={() => handleTabChange('history')} icon={<History className="w-6 h-6" />} label="History" />
+          <NavButton active={activeTab === 'profile'} onClick={() => handleTabChange('profile')} icon={<User className="w-6 h-6" />} label="Profile" />
+          <NavButton active={activeTab === 'more'} onClick={() => handleTabChange('more')} icon={<MoreHorizontal className="w-6 h-6" />} label="More" />
         </div>
       </nav>
 
-      {/* MODALS (Overlays) */}
-      <AuthModal
-        isOpen={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        initialView={authView}
-      />
-
+      {/* MODALS */}
+      <AuthModal isOpen={showAuthModal} onClose={() => setShowAuthModal(false)} initialView={authView} />
     </div>
   );
 }
 
-// Helper Component for Nav Items
+// Helper for Nav Items
 function NavButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
   return (
-    <button 
-      onClick={onClick}
-      className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition-colors ${
-        active ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'
-      }`}
-    >
-      <div className={`transform transition-transform ${active ? 'scale-110' : ''}`}>
-        {icon}
-      </div>
+    <button onClick={onClick} className={`flex flex-col items-center justify-center w-full h-full space-y-1 transition-colors ${active ? 'text-indigo-600' : 'text-gray-400 hover:text-gray-600'}`}>
+      <div className={`transform transition-transform ${active ? 'scale-110' : ''}`}>{icon}</div>
       <span className="text-[10px] font-medium">{label}</span>
     </button>
   );
 }
 
-export default App;
+// ==========================================
+// 🚀 MAIN APP WITH ROUTING
+// ==========================================
+function App() {
+  return (
+    <Routes>
+      <Route path="/" element={<Dashboard />} />
+      <Route path="/verify-email" element={<VerifyEmail />} />
+      <Route path="/forgot-password" element={<ForgotPassword />} />
+      <Route path="/reset-password" element={<ResetPassword />} />
+    </Routes>
+  );
+}
 
+export default App;

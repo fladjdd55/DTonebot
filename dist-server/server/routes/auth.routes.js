@@ -7,7 +7,10 @@ const express_1 = require("express");
 const zod_1 = require("zod");
 const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const auth_1 = require("../auth");
+const emailService_1 = require("../services/emailService");
 const auth_2 = require("../middleware/auth");
+const db_1 = require("../db");
+const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const router = (0, express_1.Router)();
 const authLimiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
@@ -26,6 +29,43 @@ const loginSchema = zod_1.z.object({
 const getDeviceInfo = (req) => ({
     ip: req.ip || req.socket.remoteAddress || 'unknown',
     userAgent: req.headers['user-agent'] || 'unknown'
+});
+// ✅ NEW: Verify Email Endpoint
+router.post('/verify-email', async (req, res) => {
+    const { token } = req.body;
+    if (!token)
+        return res.status(400).json({ error: 'Token required' });
+    const result = await emailService_1.emailService.verifyEmail(token);
+    if (!result.success)
+        return res.status(400).json({ error: result.error });
+    return res.json({ message: 'Email verified successfully' });
+});
+// ✅ NEW: Forgot Password Request
+router.post('/forgot-password', async (req, res) => {
+    const { email } = req.body;
+    // Always return success to prevent email enumeration
+    if (email)
+        await emailService_1.emailService.initiatePasswordReset(email);
+    return res.json({ message: 'If that email exists, a reset link has been sent.' });
+});
+// ✅ NEW: Complete Password Reset
+router.post('/reset-password', async (req, res) => {
+    const { token, password } = req.body;
+    const user = await db_1.db.user.findUnique({ where: { resetToken: token } });
+    if (!user || !user.resetExpires || user.resetExpires < new Date()) {
+        return res.status(400).json({ error: 'Invalid or expired token' });
+    }
+    const hash = await bcryptjs_1.default.hash(password, 12);
+    await db_1.db.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hash, resetToken: null, resetExpires: null }
+    });
+    // Revoke all sessions
+    await db_1.db.refreshToken.updateMany({
+        where: { userId: user.id },
+        data: { revoked: true }
+    });
+    return res.json({ message: 'Password reset successful' });
 });
 router.post('/register', authLimiter, async (req, res) => {
     try {
