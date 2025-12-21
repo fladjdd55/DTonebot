@@ -127,5 +127,38 @@ router.post('/logout', (req, res) => {
     res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
     res.json({ message: 'Logged out' });
 });
+// GET /auth/sessions - List active sessions
+router.get('/sessions', auth_2.requireAuth, async (req, res) => {
+    const sessions = await db_1.db.refreshToken.findMany({
+        where: { userId: req.user.id, revoked: false },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: 'desc' }
+    });
+    res.json({ sessions });
+});
+// DELETE /auth/sessions/:id - Revoke specific session
+router.delete('/sessions/:id', auth_2.requireAuth, async (req, res) => {
+    const { id } = req.params;
+    const session = await db_1.db.refreshToken.findFirst({
+        where: { id, userId: req.user.id }
+    });
+    if (!session)
+        return res.status(404).json({ error: 'Session not found' });
+    await db_1.db.refreshToken.update({ where: { id }, data: { revoked: true } });
+    res.json({ message: 'Session revoked' });
+});
+// POST /auth/sessions/revoke-all - Revoke all other sessions
+router.post('/sessions/revoke-all', auth_2.requireAuth, async (req, res) => {
+    const currentToken = req.cookies.refresh_token;
+    await db_1.db.refreshToken.updateMany({
+        where: {
+            userId: req.user.id,
+            revoked: false,
+            token: { not: currentToken } // Keep current session
+        },
+        data: { revoked: true }
+    });
+    res.json({ message: 'All other sessions revoked' });
+});
 router.get('/me', auth_2.requireAuth, (req, res) => res.json({ user: req.user }));
 exports.default = router;

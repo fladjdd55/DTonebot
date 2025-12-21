@@ -142,6 +142,45 @@ router.post('/logout', (req, res) => {
   res.json({ message: 'Logged out' });
 });
 
+// GET /auth/sessions - List active sessions
+router.get('/sessions', requireAuth, async (req: any, res) => {
+  const sessions = await db.refreshToken.findMany({
+    where: { userId: req.user.id, revoked: false },
+    select: { id: true, createdAt: true },
+    orderBy: { createdAt: 'desc' }
+  });
+  res.json({ sessions });
+});
+
+// DELETE /auth/sessions/:id - Revoke specific session
+router.delete('/sessions/:id', requireAuth, async (req: any, res) => {
+  const { id } = req.params;
+  const session = await db.refreshToken.findFirst({
+    where: { id, userId: req.user.id }
+  });
+
+  if (!session) return res.status(404).json({ error: 'Session not found' });
+
+  await db.refreshToken.update({ where: { id }, data: { revoked: true } });
+  res.json({ message: 'Session revoked' });
+});
+
+// POST /auth/sessions/revoke-all - Revoke all other sessions
+router.post('/sessions/revoke-all', requireAuth, async (req: any, res) => {
+  const currentToken = req.cookies.refresh_token;
+
+  await db.refreshToken.updateMany({
+    where: {
+      userId: req.user.id,
+      revoked: false,
+      token: { not: currentToken } // Keep current session
+    },
+    data: { revoked: true }
+  });
+
+  res.json({ message: 'All other sessions revoked' });
+});
+
 router.get('/me', requireAuth, (req: any, res) => res.json({ user: req.user }));
 
 export default router;

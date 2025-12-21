@@ -22,6 +22,8 @@ const webhook_routes_1 = __importDefault(require("./routes/webhook.routes"));
 // System
 const cron_1 = require("./cron");
 const logger_1 = require("./lib/logger");
+const errorHandler_1 = require("./middleware/errorHandler");
+const admin_routes_1 = __importDefault(require("./routes/admin.routes"));
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
@@ -138,6 +140,8 @@ app.get('/api/health', (req, res) => res.redirect('/health'));
 const DIST_PATH = path_1.default.join(process.cwd(), 'dist');
 app.use(express_1.default.static(DIST_PATH));
 app.get(/(.*)/, (_req, res) => res.sendFile(path_1.default.join(DIST_PATH, 'index.html')));
+app.use(errorHandler_1.errorHandler);
+app.use('/api/admin', admin_routes_1.default);
 async function startServer() {
     try {
         // 1. Test Database Connection

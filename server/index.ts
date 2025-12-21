@@ -19,6 +19,8 @@ import webhookRoutes from './routes/webhook.routes';
 // System
 import { startCronJobs } from './cron';
 import { requestLogger } from './lib/logger';
+import { errorHandler } from './middleware/errorHandler';
+import adminRoutes from './routes/admin.routes';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -151,6 +153,9 @@ app.get('/api/health', (req, res) => res.redirect('/health'));
 const DIST_PATH = path.join(process.cwd(), 'dist');
 app.use(express.static(DIST_PATH));
 app.get(/(.*)/, (_req, res) => res.sendFile(path.join(DIST_PATH, 'index.html')));
+
+app.use(errorHandler);
+app.use('/api/admin', adminRoutes);
 
 async function startServer() {
   try {
