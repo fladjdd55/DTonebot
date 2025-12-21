@@ -5,6 +5,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
 const stripe_1 = __importDefault(require("stripe"));
+const zod_1 = require("zod");
 const db_1 = require("../db");
 const payment_1 = require("../payment");
 const dtone_1 = require("../dtone");
@@ -14,6 +15,13 @@ const client_1 = require("@prisma/client");
 const config_1 = require("../config");
 const router = (0, express_1.Router)();
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
+// ✅ Validation Schema
+const purchaseSchema = zod_1.z.object({
+    productId: zod_1.z.number().int().positive(),
+    mobile: zod_1.z.string().min(8).max(20), // Basic length check
+    paymentId: zod_1.z.string().startsWith('pi_'), // Must be a Stripe Payment Intent
+    type: zod_1.z.string().optional()
+});
 router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
     const { mobile, productId, type, customAmount } = req.body;
     const idempotencyKey = req.headers['idempotency-key'];
@@ -59,11 +67,6 @@ router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
             chargeAmount: finalCharge,
             localAmount: localAmount,
             currency: product.currency,
-            breakdown: {
-                base: cost,
-                margin: config_1.FALLBACK_MARGIN,
-                final: finalCharge
-            }
         });
     }
     catch (error) {
@@ -74,6 +77,11 @@ router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
 });
 router.post('/purchase', auth_1.optionalAuth, async (req, res) => {
     try {
+        const parsed = purchaseSchema.safeParse(req.body);
+        if (!parsed.success) {
+            console.warn('[Purchase] Invalid Request:', parsed.error.format());
+            return res.status(400).json({ error: 'Invalid request parameters' });
+        }
         const { productId, mobile, paymentId, type } = req.body;
         const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
         if (paymentIntent.status !== 'succeeded')

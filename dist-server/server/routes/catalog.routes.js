@@ -10,6 +10,15 @@ const sync_operators_1 = require("../scripts/sync-operators");
 const router = (0, express_1.Router)();
 const redis = (0, redis_1.getRedis)();
 const CACHE_TTL = 3600;
+// ✅ SECURITY: Limit Lookup Requests
+// 10 requests per minute per IP address
+const lookupLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10,
+    message: { error: "Too many lookup requests. Please wait a minute." },
+    standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
+    legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+});
 async function getCachedCountries() {
     const cached = await redis.get('cache:countries');
     if (cached)
@@ -107,7 +116,7 @@ router.get('/products', async (req, res) => {
     }
     return res.status(400).json({ error: result.error });
 });
-router.post('/lookup', async (req, res) => {
+router.post('/lookup', lookupLimiter, async (req, res) => {
     const { mobile } = req.body;
     if (!mobile)
         return res.status(400).json({ error: 'Mobile required' });

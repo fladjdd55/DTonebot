@@ -16,6 +16,8 @@ const crypto_1 = __importDefault(require("crypto"));
 const db_1 = require("./db");
 const uuid_1 = require("uuid");
 const redis_1 = require("./services/redis");
+const emailService_1 = require("./services/emailService");
+const twoFactorService_1 = require("./services/twoFactorService");
 const redis = (0, redis_1.getRedis)();
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET)
@@ -119,6 +121,13 @@ exports.authService = {
                     name: name || null
                 }
             });
+            try {
+                const token = await emailService_1.emailService.createVerificationToken(user.id);
+                await emailService_1.emailService.sendVerificationEmail(user.email, token);
+            }
+            catch (e) {
+                console.error("Verification email failed:", e);
+            }
             const tokens = await generateTokens(user.id, user.email, device || { ip: 'unknown', userAgent: 'unknown' });
             return {
                 success: true,
@@ -136,7 +145,7 @@ exports.authService = {
             return { success: false, error: 'Registration failed' };
         }
     },
-    async login(email, password, device) {
+    async login(email, password, device, twoFactorToken) {
         try {
             const user = await db_1.db.user.findUnique({
                 where: { email: email.toLowerCase() }
@@ -155,6 +164,27 @@ exports.authService = {
             const isValid = await bcryptjs_1.default.compare(password, user.passwordHash);
             if (!isValid) {
                 return { success: false, error: 'Invalid credentials' };
+            }
+            if (user.twoFactorEnabled) {
+                if (!twoFactorToken) {
+                    return { success: false, error: '2FA_REQUIRED' }; // specific code for frontend
+                }
+                const valid = await twoFactorService_1.twoFactorService.verifyToken(user.id, twoFactorToken);
+                if (!valid)
+                    return { success: false, error: 'Invalid 2FA code' };
+            }
+            async function enforceSessionLimit(userId) {
+                const MAX_SESSIONS = 5;
+                const count = await db_1.db.refreshToken.count({ where: { userId, revoked: false } });
+                if (count >= MAX_SESSIONS) {
+                    const oldest = await db_1.db.refreshToken.findFirst({
+                        where: { userId, revoked: false },
+                        orderBy: { createdAt: 'asc' }
+                    });
+                    if (oldest) {
+                        await db_1.db.refreshToken.update({ where: { id: oldest.id }, data: { revoked: true } });
+                    }
+                }
             }
             const tokens = await generateTokens(user.id, user.email, device || { ip: 'unknown', userAgent: 'unknown' });
             return {

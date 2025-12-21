@@ -62,6 +62,19 @@ const envSchema = zod_1.z.object({
     TELEGRAM_BOT_TOKEN: zod_1.z.string().optional(),
     TELEGRAM_APP_URL: zod_1.z.string().url().optional(),
     ADMIN_WEBHOOK_URL: zod_1.z.string().url().optional(),
+    // ==============================================
+    // 📧 EMAIL & SECURITY (New)
+    // ==============================================
+    SMTP_HOST: zod_1.z.string().min(1),
+    SMTP_PORT: zod_1.z.coerce.number().default(587),
+    SMTP_USER: zod_1.z.string().min(1),
+    SMTP_PASS: zod_1.z.string().min(1),
+    SMTP_SECURE: zod_1.z.string().transform(v => v === 'true').default('false'),
+    FROM_EMAIL: zod_1.z.string().email(),
+    // URL used for email links (verify/reset)
+    FRONTEND_URL: zod_1.z.string().url(),
+    // 2FA Issuer Name
+    TWO_FACTOR_ISSUER: zod_1.z.string().default('RechargeBot'),
     // Sync Flag (Boolean coercion)
     SYNC_ON_STARTUP: zod_1.z.string().default('false').transform((val) => val === 'true'),
 });

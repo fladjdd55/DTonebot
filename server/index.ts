@@ -17,6 +17,7 @@ import webhookRoutes from './routes/webhook.routes';
 
 // System
 import { startCronJobs } from './cron';
+import { requestLogger } from './lib/logger';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -25,6 +26,7 @@ app.set('trust proxy', 1);
 
 // 1. Start System Processes
 startCronJobs();
+app.use(requestLogger);
 
 // 2. Security Middleware
 app.use(helmet({
@@ -133,6 +135,11 @@ app.get('/health', async (_req, res) => { // Use _req to ignore unused param war
       error: 'Service Unavailable' // Generic message for public safety
     });
   }
+
+  const dtoneStatus = await dtoneService.getCountries(1)
+    .then(r => r.success ? 'connected' : 'degraded')
+    .catch(() => 'disconnected');
+  status.services.dtone = dtoneStatus;
 });
 
 // Redirect /api/health to /health is excellent for consistency

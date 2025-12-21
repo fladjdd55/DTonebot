@@ -58,6 +58,16 @@ model Transaction {
 
   userId          String?
   user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  password        String
+  emailVerified   Boolean   @default(false)
+  verifyToken     String?   @unique
+  verifyExpires   DateTime?
+  resetToken      String?   @unique
+  resetExpires    DateTime?
+  twoFactorEnabled     Boolean  @default(false)
+  twoFactorSecret      String?  // Encrypted in app, but stored here
+  twoFactorTempSecret  String?  // Pending verification
+  twoFactorBackupCodes String[] @default([]) // Hashed
   
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt

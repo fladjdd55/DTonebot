@@ -11,6 +11,8 @@ import crypto from 'crypto';
 import { db } from './db';
 import { v4 as uuidv4 } from 'uuid';
 import { getRedis } from './services/redis';
+import { emailService } from './services/emailService';
+import { twoFactorService } from './services/twoFactorService';
 
 const redis = getRedis();
 
@@ -181,6 +183,13 @@ export const authService = {
         }
       });
 
+      try {
+        const token = await emailService.createVerificationToken(user.id);
+        await emailService.sendVerificationEmail(user.email, token);
+      } catch (e) {
+        console.error("Verification email failed:", e);
+      }
+
       const tokens = await generateTokens(
         user.id, 
         user.email,
@@ -206,7 +215,8 @@ export const authService = {
   async login(
     email: string, 
     password: string,
-    device?: DeviceInfo
+    device?: DeviceInfo,
+    twoFactorToken?: string
   ): Promise<AuthResult> {
     try {
       const user = await db.user.findUnique({ 
@@ -229,6 +239,29 @@ export const authService = {
       const isValid = await bcrypt.compare(password, user.passwordHash);
       if (!isValid) {
         return { success: false, error: 'Invalid credentials' };
+      }
+      
+      if (user.twoFactorEnabled) {
+         if (!twoFactorToken) {
+            return { success: false, error: '2FA_REQUIRED' }; // specific code for frontend
+         } 
+         const valid = await twoFactorService.verifyToken(user.id, twoFactorToken);
+         if (!valid) return { success: false, error: 'Invalid 2FA code' };
+      }
+
+		async function enforceSessionLimit(userId: string) {
+        const MAX_SESSIONS = 5;
+        const count = await db.refreshToken.count({ where: { userId, revoked: false } });
+
+        if (count >= MAX_SESSIONS) {
+           const oldest = await db.refreshToken.findFirst({
+             where: { userId, revoked: false },
+             orderBy: { createdAt: 'asc' }
+        });
+        if (oldest) {
+          await db.refreshToken.update({ where: { id: oldest.id }, data: { revoked: true } });
+        }
+       }
       }
 
       const tokens = await generateTokens(

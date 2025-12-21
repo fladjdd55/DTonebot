@@ -17,7 +17,7 @@ interface DeviceInfo {
 }
 export declare const authService: {
     register(email: string, password: string, name?: string, device?: DeviceInfo): Promise<AuthResult>;
-    login(email: string, password: string, device?: DeviceInfo): Promise<AuthResult>;
+    login(email: string, password: string, device?: DeviceInfo, twoFactorToken?: string): Promise<AuthResult>;
     /**
      * FIXED: Token rotation with rollback on failure
      */

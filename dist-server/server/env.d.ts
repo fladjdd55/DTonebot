@@ -16,6 +16,14 @@ export declare const env: {
     STRIPE_SECRET_KEY: string;
     STRIPE_WEBHOOK_SECRET: string;
     VITE_STRIPE_PUBLISHABLE_KEY: string;
+    SMTP_HOST: string;
+    SMTP_PORT: number;
+    SMTP_USER: string;
+    SMTP_PASS: string;
+    SMTP_SECURE: boolean;
+    FROM_EMAIL: string;
+    FRONTEND_URL: string;
+    TWO_FACTOR_ISSUER: string;
     SYNC_ON_STARTUP: boolean;
     VITE_API_URL?: string | undefined;
     REDIS_URL?: string | undefined;

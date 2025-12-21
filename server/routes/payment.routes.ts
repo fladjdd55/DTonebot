@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express';
 import Stripe from 'stripe';
+import { z } from 'zod';
 import { db } from '../db';
 import { paymentService } from '../payment';
 import { dtoneService } from '../dtone';
@@ -10,6 +11,14 @@ import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
+
+// ✅ Validation Schema
+const purchaseSchema = z.object({
+  productId: z.number().int().positive(),
+  mobile: z.string().min(8).max(20), // Basic length check
+  paymentId: z.string().startsWith('pi_'), // Must be a Stripe Payment Intent
+  type: z.string().optional()
+});
 
 router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Response): Promise<any> => {
   const { mobile, productId, type, customAmount } = req.body;
@@ -61,11 +70,6 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
       chargeAmount: finalCharge,
       localAmount: localAmount,
       currency: product.currency,
-      breakdown: { 
-        base: cost, 
-        margin: FALLBACK_MARGIN, 
-        final: finalCharge 
-      }
     });
   } catch (error: any) {
     if (error.code === 'P2002') return res.status(409).json({ error: "Duplicate request" });
@@ -75,6 +79,13 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
 
 router.post('/purchase', optionalAuth, async (req: Request, res: Response): Promise<any> => {
   try {
+    const parsed = purchaseSchema.safeParse(req.body);
+    
+    if (!parsed.success) {
+      console.warn('[Purchase] Invalid Request:', parsed.error.format());
+      return res.status(400).json({ error: 'Invalid request parameters' });
+    }
+
     const { productId, mobile, paymentId, type } = req.body;
     const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
     

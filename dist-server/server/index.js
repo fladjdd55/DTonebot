@@ -20,11 +20,13 @@ const payment_routes_1 = __importDefault(require("./routes/payment.routes"));
 const webhook_routes_1 = __importDefault(require("./routes/webhook.routes"));
 // System
 const cron_1 = require("./cron");
+const logger_1 = require("./lib/logger");
 const app = (0, express_1.default)();
 const PORT = process.env.PORT || 5000;
 app.set('trust proxy', 1);
 // 1. Start System Processes
 (0, cron_1.startCronJobs)();
+app.use(logger_1.requestLogger);
 // 2. Security Middleware
 app.use((0, helmet_1.default)({
     contentSecurityPolicy: {
@@ -123,6 +125,10 @@ app.get('/health', async (_req, res) => {
             error: 'Service Unavailable' // Generic message for public safety
         });
     }
+    const dtoneStatus = await dtoneService.getCountries(1)
+        .then(r => r.success ? 'connected' : 'degraded')
+        .catch(() => 'disconnected');
+    status.services.dtone = dtoneStatus;
 });
 // Redirect /api/health to /health is excellent for consistency
 app.get('/api/health', (req, res) => res.redirect('/health'));
