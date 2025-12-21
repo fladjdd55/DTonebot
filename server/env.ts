@@ -86,7 +86,7 @@ const envSchema = z.object({
   SMTP_PORT: z.coerce.number().default(587),
   SMTP_USER: z.string().min(1),
   SMTP_PASS: z.string().min(1),
-  SMTP_SECURE: z.string().transform(v => v === 'true').default('false'),
+  SMTP_SECURE: z.string().default('false').transform(v => v === 'true'),
   FROM_EMAIL: z.string().email(),
 
   // URL used for email links (verify/reset)

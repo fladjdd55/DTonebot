@@ -1,4 +1,5 @@
 import './env';
+import { dtoneService } from './dtone';
 import { env } from './env';
 import express from 'express';
 import cors from 'cors';
@@ -101,7 +102,8 @@ app.get('/health', async (_req, res) => { // Use _req to ignore unused param war
     timestamp: new Date().toISOString(),
     services: {
       database: 'unknown',
-      redis: 'unknown'
+      redis: 'unknown',
+      dtone: 'unknown'
     }
   };
 
@@ -137,7 +139,7 @@ app.get('/health', async (_req, res) => { // Use _req to ignore unused param war
   }
 
   const dtoneStatus = await dtoneService.getCountries(1)
-    .then(r => r.success ? 'connected' : 'degraded')
+    .then((r: any) => r.success ? 'connected' : 'degraded')
     .catch(() => 'disconnected');
   status.services.dtone = dtoneStatus;
 });

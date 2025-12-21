@@ -7,7 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ✅ FIXED: Added PROCESSING to match your code logic
 enum TransactionStatus {
   INITIALIZED
   PENDING
@@ -28,6 +27,19 @@ model User {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   
+  // ✅ CORRECT LOCATION: Auth fields belong here
+  emailVerified        Boolean   @default(false)
+  verifyToken          String?   @unique
+  verifyExpires        DateTime?
+  
+  resetToken           String?   @unique
+  resetExpires         DateTime?
+
+  twoFactorEnabled     Boolean   @default(false)
+  twoFactorSecret      String?   
+  twoFactorTempSecret  String?   
+  twoFactorBackupCodes String[]  @default([])
+
   transactions  Transaction[]
   refreshTokens RefreshToken[]
   
@@ -43,7 +55,6 @@ model Transaction {
   mobile          String
   email           String?
   
-  // ✅ FIXED: Added missing relation to Product
   productId       Int
   product         Product           @relation(fields: [productId], references: [id])
 
@@ -52,22 +63,10 @@ model Transaction {
   productType     String?
   status          TransactionStatus @default(PENDING)
   processedVia    String?
-  
-  // ✅ FIXED: Added missing field for DTOne ID
   dtoneTransactionId String?
 
   userId          String?
   user            User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
-  password        String
-  emailVerified   Boolean   @default(false)
-  verifyToken     String?   @unique
-  verifyExpires   DateTime?
-  resetToken      String?   @unique
-  resetExpires    DateTime?
-  twoFactorEnabled     Boolean  @default(false)
-  twoFactorSecret      String?  // Encrypted in app, but stored here
-  twoFactorTempSecret  String?  // Pending verification
-  twoFactorBackupCodes String[] @default([]) // Hashed
   
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
@@ -100,7 +99,6 @@ model Product {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
   
-  // Relation back to Transaction (Optional but good for completeness)
   transactions  Transaction[]
   
   @@index([operatorId])
@@ -153,4 +151,3 @@ model AuditLog {
   @@index([action])
   @@map("audit_logs")
 }
-

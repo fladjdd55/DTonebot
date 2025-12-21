@@ -1,6 +1,10 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = require("express");
+const express_rate_limit_1 = __importDefault(require("express-rate-limit"));
 const redis_1 = require("../services/redis");
 const db_1 = require("../db");
 const dtone_1 = require("../dtone");
@@ -12,7 +16,7 @@ const redis = (0, redis_1.getRedis)();
 const CACHE_TTL = 3600;
 // ✅ SECURITY: Limit Lookup Requests
 // 10 requests per minute per IP address
-const lookupLimiter = rateLimit({
+const lookupLimiter = (0, express_rate_limit_1.default)({
     windowMs: 60 * 1000, // 1 minute
     max: 10,
     message: { error: "Too many lookup requests. Please wait a minute." },

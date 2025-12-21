@@ -1,6 +1,6 @@
 import { PrismaClient } from '@prisma/client';
 export declare const db: PrismaClient<{
-    log: ("error" | "query" | "warn")[];
+    log: ("error" | "warn" | "query")[];
     datasources: {
         db: {
             url: string | undefined;

@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 require("./env");
+const dtone_1 = require("./dtone");
 const env_1 = require("./env");
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
@@ -95,7 +96,8 @@ app.get('/health', async (_req, res) => {
         timestamp: new Date().toISOString(),
         services: {
             database: 'unknown',
-            redis: 'unknown'
+            redis: 'unknown',
+            dtone: 'unknown'
         }
     };
     try {
@@ -125,8 +127,8 @@ app.get('/health', async (_req, res) => {
             error: 'Service Unavailable' // Generic message for public safety
         });
     }
-    const dtoneStatus = await dtoneService.getCountries(1)
-        .then(r => r.success ? 'connected' : 'degraded')
+    const dtoneStatus = await dtone_1.dtoneService.getCountries(1)
+        .then((r) => r.success ? 'connected' : 'degraded')
         .catch(() => 'disconnected');
     status.services.dtone = dtoneStatus;
 });

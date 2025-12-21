@@ -1,7 +1,7 @@
 export declare const twoFactorService: {
     generateSecret(userId: string, email: string): Promise<{
-        secret: any;
-        qrCode: any;
+        secret: string;
+        qrCode: string;
     }>;
     enableTwoFactor(userId: string, token: string): Promise<{
         success: boolean;

@@ -69,7 +69,7 @@ const envSchema = zod_1.z.object({
     SMTP_PORT: zod_1.z.coerce.number().default(587),
     SMTP_USER: zod_1.z.string().min(1),
     SMTP_PASS: zod_1.z.string().min(1),
-    SMTP_SECURE: zod_1.z.string().transform(v => v === 'true').default('false'),
+    SMTP_SECURE: zod_1.z.string().default('false').transform(v => v === 'true'),
     FROM_EMAIL: zod_1.z.string().email(),
     // URL used for email links (verify/reset)
     FRONTEND_URL: zod_1.z.string().url(),

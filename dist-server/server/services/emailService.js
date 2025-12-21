@@ -6,8 +6,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.emailService = void 0;
 const nodemailer_1 = __importDefault(require("nodemailer"));
 const crypto_1 = __importDefault(require("crypto"));
-const db_1 = require("../db"); // Adapted import
-const env_1 = require("../env"); // Adapted import
+const db_1 = require("../db");
+const env_1 = require("../env");
 const transporter = nodemailer_1.default.createTransport({
     host: env_1.env.SMTP_HOST,
     port: env_1.env.SMTP_PORT,
@@ -21,25 +21,18 @@ exports.emailService = {
     generateToken() {
         return crypto_1.default.randomBytes(32).toString('hex');
     },
+    // --- Verification ---
     async sendVerificationEmail(email, token) {
         const verifyUrl = `${env_1.env.FRONTEND_URL}/verify-email?token=${token}`;
         await transporter.sendMail({
             from: env_1.env.FROM_EMAIL,
             to: email,
-            subject: 'Verify Your Email - RechargeBot',
-            html: `
-        <div style="font-family: sans-serif; padding: 20px;">
-          <h2>Welcome!</h2>
-          <p>Click below to verify your account:</p>
-          <a href="${verifyUrl}" style="background:#4F46E5;color:white;padding:10px 20px;text-decoration:none;border-radius:5px;">Verify Email</a>
-          <p><small>Link expires in 24 hours.</small></p>
-        </div>
-      `,
+            subject: 'Verify Your Email',
+            html: `<p>Click here to verify: <a href="${verifyUrl}">${verifyUrl}</a></p>`,
         });
     },
     async createVerificationToken(userId) {
         const token = this.generateToken();
-        // Expires in 24 hours
         const expires = new Date(Date.now() + 24 * 60 * 60 * 1000);
         await db_1.db.user.update({
             where: { id: userId },
@@ -47,5 +40,43 @@ exports.emailService = {
         });
         return token;
     },
-    // ... Add Password Reset methods from your plan here ...
+    async verifyEmail(token) {
+        const user = await db_1.db.user.findUnique({ where: { verifyToken: token } });
+        if (!user)
+            return { success: false, error: 'Invalid token' };
+        if (user.verifyExpires && user.verifyExpires < new Date())
+            return { success: false, error: 'Expired' };
+        await db_1.db.user.update({
+            where: { id: user.id },
+            data: { emailVerified: true, verifyToken: null, verifyExpires: null },
+        });
+        return { success: true };
+    },
+    // --- Password Reset (✅ COMPLETED) ---
+    async sendPasswordResetEmail(email, token) {
+        const resetUrl = `${env_1.env.FRONTEND_URL}/reset-password?token=${token}`;
+        await transporter.sendMail({
+            from: env_1.env.FROM_EMAIL,
+            to: email,
+            subject: 'Reset Password Request',
+            html: `
+        <h3>Password Reset</h3>
+        <p>You requested a password reset. Click below to proceed:</p>
+        <a href="${resetUrl}">Reset Password</a>
+        <p>This link expires in 1 hour.</p>
+      `
+        });
+    },
+    async initiatePasswordReset(email) {
+        const user = await db_1.db.user.findUnique({ where: { email } });
+        if (!user)
+            return; // Silent fail for security
+        const token = this.generateToken();
+        const expires = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+        await db_1.db.user.update({
+            where: { id: user.id },
+            data: { resetToken: token, resetExpires: expires }
+        });
+        await this.sendPasswordResetEmail(email, token);
+    }
 };
