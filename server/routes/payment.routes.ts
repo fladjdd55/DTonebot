@@ -5,6 +5,7 @@ import { db } from '../db';
 import { paymentService } from '../payment';
 import { dtoneService } from '../dtone';
 import { transactionService } from '../services/transactionService';
+import { pricingService } from '../services/pricingService';
 import { optionalAuth, requireAuth } from '../middleware/auth';
 import { TransactionStatus } from '@prisma/client';
 import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
@@ -30,24 +31,18 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
     const product = await db.product.findUnique({ where: { id: productId } });
     if (!product) return res.status(400).json({ error: 'Invalid product' });
 
-    let cost = product.costPrice || product.amount || 0;
-    if (product.type.includes('RANGE') && customAmount) {
-      const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
-      cost = customAmount * unitCost;
+    // ✅ USE PRICING SERVICE (Replaces manual math)
+    const pricing = pricingService.calculatePrice(product, customAmount);
+
+    if (pricing.isBelowMin) {
+      return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
     }
 
-    const finalCharge = cost * FALLBACK_MARGIN;
-    if (finalCharge < GLOBAL_MIN_USD) return res.status(400).json({ error: `Min order is $${GLOBAL_MIN_USD}` });
-
-    const localAmount = (product.type.includes('RANGE') && customAmount)
-      ? customAmount
-      : (product.amount || 0);
-
-    const result = await paymentService.createPaymentIntent(finalCharge, 'USD', {
+    const result = await paymentService.createPaymentIntent(pricing.finalCharge, 'USD', {
       productId: Number(productId),
       type,
       userId: (req as any).user?.id,
-      localAmount: localAmount.toString()
+      localAmount: pricing.localAmount.toString()
     }, idempotencyKey);
 
     await db.transaction.create({
@@ -56,7 +51,7 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
         paymentIntentId: result.id,
         mobile,
         productId: Number(productId),
-        amount: finalCharge,
+        amount: pricing.finalCharge,
         currency: 'USD',
         productType: type,
         status: TransactionStatus.INITIALIZED,
@@ -67,8 +62,8 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
 
     res.json({ 
       ...result, 
-      chargeAmount: finalCharge,
-      localAmount: localAmount,
+      chargeAmount: pricing.finalCharge,
+      localAmount: pricing.localAmount,
       currency: product.currency,
     });
   } catch (error: any) {
@@ -175,32 +170,16 @@ router.post('/calculate-price', requireAuth, async (req: Request, res: Response)
     const product = await db.product.findUnique({ where: { id: productId } });
     if (!product) return res.status(400).json({ error: 'Invalid product' });
 
-    // 1. Calculate Cost (Reuse logic from /create-payment-intent to keep prices consistent)
-    let cost = product.costPrice || product.amount || 0;
-    
-    // Handle Ranged Products (Custom Amount)
-    if (product.type.includes('RANGE') && customAmount) {
-      const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
-      cost = customAmount * unitCost;
+    // ✅ USE PRICING SERVICE
+    const pricing = pricingService.calculatePrice(product, customAmount);
+
+    if (pricing.isBelowMin) {
+       return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
     }
 
-    // 2. Apply Margin
-    const finalCharge = cost * FALLBACK_MARGIN;
-
-    // 3. Enforce Global Minimum
-    if (finalCharge < GLOBAL_MIN_USD) {
-       return res.status(400).json({ error: `Min order is $${GLOBAL_MIN_USD}` });
-    }
-
-    // 4. Determine Local Amount (what the user receives)
-    const localAmount = (product.type.includes('RANGE') && customAmount)
-      ? customAmount
-      : (product.amount || 0);
-
-    // ✅ FIX: Only send safe public data (No margins, no base costs)
     const response: PriceResponse = {
-      chargeAmount: finalCharge,
-      localAmount: localAmount,
+      chargeAmount: pricing.finalCharge,
+      localAmount: pricing.localAmount,
       currency: product.currency,
       productName: product.name,
     };

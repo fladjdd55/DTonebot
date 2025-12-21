@@ -5,9 +5,8 @@ export interface PriceVerificationResult {
     error?: string;
     code?: string;
 }
-declare function getAdjustedMin(product: any): number;
 export declare const priceVerificationService: {
-    getAdjustedMin: typeof getAdjustedMin;
+    getAdjustedMin(product: any): number;
     verifyProductPrice(productId: number, paidAmount: number, paidCurrency: string): Promise<PriceVerificationResult>;
     getProductPrice(productId: number): Promise<{
         success: boolean;
@@ -19,4 +18,3 @@ export declare const priceVerificationService: {
         error?: string;
     }>;
 };
-export {};

@@ -1,16 +1,19 @@
 export declare const pricingService: {
-    calculatePrice(productId: number, mobile: string): {
-        finalCharge: any;
+    /**
+     * The core formula for calculating Price from Cost.
+     * Centralizes the margin logic so it's the same for UI, Payment, and Verification.
+     */
+    calculatePrice(product: any, customAmount?: number): {
+        cost: any;
+        finalCharge: number;
         localAmount: any;
         currency: any;
-        productName: any;
-        _internal: {
-            basePrice: any;
-            marginPercent: any;
-            marginAmount: any;
-            fxSpread: any;
-            dtOneCost: any;
-        };
+        isBelowMin: boolean;
+        minRequired: number;
     };
-    toPublic(priceData: PriceData): PriceResponse;
+    /**
+     * Calculates the Safe Minimum Amount for the frontend.
+     * Ensures the slider minimum is high enough to cover our costs + global min.
+     */
+    getSafeMinAmount(p: any): number;
 };

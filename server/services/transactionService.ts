@@ -3,36 +3,13 @@ import { db } from '../db';
 import { getRedis } from './redis';
 import { dtoneService } from '../dtone';
 import { paymentService } from '../payment';
+import { pricingService } from './pricingService';
 import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
 
 export const transactionService = {
   // Helper: Calculate Safe Minimum Amount
   getSafeMinAmount(p: any): number {
-    let safeMin = p.minAmount || 0;
-
-    // Only check Ranged products
-    if (p.type === 'RANGED') {
-      // 1. Try to use cached cost price from DB
-      const baseMinCost = p.costPriceMin || p.costPrice;
-
-      if (baseMinCost && baseMinCost > 0) {
-        const costPerUnit = baseMinCost / (p.minAmount || 1);
-        
-        // Target: We need (Cost * Margin) >= GLOBAL_MIN_USD
-        const targetCostUsd = GLOBAL_MIN_USD / FALLBACK_MARGIN;
-        const requiredUnits = targetCostUsd / costPerUnit;
-
-        if (requiredUnits > safeMin) {
-          safeMin = Math.ceil(requiredUnits);
-        }
-      } 
-      // 2. Fallback: If DB missing cost (Sync didn't run), assume 1-to-1 conversion roughly
-      else if (p.currency === 'USD') {
-         const targetUnits = GLOBAL_MIN_USD / FALLBACK_MARGIN;
-         if (targetUnits > safeMin) safeMin = Math.ceil(targetUnits);
-      }
-    }
-    return safeMin;
+    return pricingService.getSafeMinAmount(p);
   },
 
   async processPurchase(

@@ -10,9 +10,9 @@ const db_1 = require("../db");
 const payment_1 = require("../payment");
 const dtone_1 = require("../dtone");
 const transactionService_1 = require("../services/transactionService");
+const pricingService_1 = require("../services/pricingService");
 const auth_1 = require("../middleware/auth");
 const client_1 = require("@prisma/client");
-const config_1 = require("../config");
 const router = (0, express_1.Router)();
 const stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
 // ✅ Validation Schema
@@ -31,22 +31,16 @@ router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
         const product = await db_1.db.product.findUnique({ where: { id: productId } });
         if (!product)
             return res.status(400).json({ error: 'Invalid product' });
-        let cost = product.costPrice || product.amount || 0;
-        if (product.type.includes('RANGE') && customAmount) {
-            const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
-            cost = customAmount * unitCost;
+        // ✅ USE PRICING SERVICE (Replaces manual math)
+        const pricing = pricingService_1.pricingService.calculatePrice(product, customAmount);
+        if (pricing.isBelowMin) {
+            return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
         }
-        const finalCharge = cost * config_1.FALLBACK_MARGIN;
-        if (finalCharge < config_1.GLOBAL_MIN_USD)
-            return res.status(400).json({ error: `Min order is $${config_1.GLOBAL_MIN_USD}` });
-        const localAmount = (product.type.includes('RANGE') && customAmount)
-            ? customAmount
-            : (product.amount || 0);
-        const result = await payment_1.paymentService.createPaymentIntent(finalCharge, 'USD', {
+        const result = await payment_1.paymentService.createPaymentIntent(pricing.finalCharge, 'USD', {
             productId: Number(productId),
             type,
             userId: req.user?.id,
-            localAmount: localAmount.toString()
+            localAmount: pricing.localAmount.toString()
         }, idempotencyKey);
         await db_1.db.transaction.create({
             data: {
@@ -54,7 +48,7 @@ router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
                 paymentIntentId: result.id,
                 mobile,
                 productId: Number(productId),
-                amount: finalCharge,
+                amount: pricing.finalCharge,
                 currency: 'USD',
                 productType: type,
                 status: client_1.TransactionStatus.INITIALIZED,
@@ -64,8 +58,8 @@ router.post('/create-payment-intent', auth_1.optionalAuth, async (req, res) => {
         });
         res.json({
             ...result,
-            chargeAmount: finalCharge,
-            localAmount: localAmount,
+            chargeAmount: pricing.finalCharge,
+            localAmount: pricing.localAmount,
             currency: product.currency,
         });
     }
@@ -156,27 +150,14 @@ router.post('/calculate-price', auth_1.requireAuth, async (req, res) => {
         const product = await db_1.db.product.findUnique({ where: { id: productId } });
         if (!product)
             return res.status(400).json({ error: 'Invalid product' });
-        // 1. Calculate Cost (Reuse logic from /create-payment-intent to keep prices consistent)
-        let cost = product.costPrice || product.amount || 0;
-        // Handle Ranged Products (Custom Amount)
-        if (product.type.includes('RANGE') && customAmount) {
-            const unitCost = (product.costPriceMin || 0) / (product.minAmount || 1);
-            cost = customAmount * unitCost;
+        // ✅ USE PRICING SERVICE
+        const pricing = pricingService_1.pricingService.calculatePrice(product, customAmount);
+        if (pricing.isBelowMin) {
+            return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
         }
-        // 2. Apply Margin
-        const finalCharge = cost * config_1.FALLBACK_MARGIN;
-        // 3. Enforce Global Minimum
-        if (finalCharge < config_1.GLOBAL_MIN_USD) {
-            return res.status(400).json({ error: `Min order is $${config_1.GLOBAL_MIN_USD}` });
-        }
-        // 4. Determine Local Amount (what the user receives)
-        const localAmount = (product.type.includes('RANGE') && customAmount)
-            ? customAmount
-            : (product.amount || 0);
-        // ✅ FIX: Only send safe public data (No margins, no base costs)
         const response = {
-            chargeAmount: finalCharge,
-            localAmount: localAmount,
+            chargeAmount: pricing.finalCharge,
+            localAmount: pricing.localAmount,
             currency: product.currency,
             productName: product.name,
         };

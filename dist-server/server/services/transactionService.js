@@ -6,32 +6,11 @@ const db_1 = require("../db");
 const redis_1 = require("./redis");
 const dtone_1 = require("../dtone");
 const payment_1 = require("../payment");
-const config_1 = require("../config");
+const pricingService_1 = require("./pricingService");
 exports.transactionService = {
     // Helper: Calculate Safe Minimum Amount
     getSafeMinAmount(p) {
-        let safeMin = p.minAmount || 0;
-        // Only check Ranged products
-        if (p.type === 'RANGED') {
-            // 1. Try to use cached cost price from DB
-            const baseMinCost = p.costPriceMin || p.costPrice;
-            if (baseMinCost && baseMinCost > 0) {
-                const costPerUnit = baseMinCost / (p.minAmount || 1);
-                // Target: We need (Cost * Margin) >= GLOBAL_MIN_USD
-                const targetCostUsd = config_1.GLOBAL_MIN_USD / config_1.FALLBACK_MARGIN;
-                const requiredUnits = targetCostUsd / costPerUnit;
-                if (requiredUnits > safeMin) {
-                    safeMin = Math.ceil(requiredUnits);
-                }
-            }
-            // 2. Fallback: If DB missing cost (Sync didn't run), assume 1-to-1 conversion roughly
-            else if (p.currency === 'USD') {
-                const targetUnits = config_1.GLOBAL_MIN_USD / config_1.FALLBACK_MARGIN;
-                if (targetUnits > safeMin)
-                    safeMin = Math.ceil(targetUnits);
-            }
-        }
-        return safeMin;
+        return pricingService_1.pricingService.getSafeMinAmount(p);
     },
     async processPurchase(data, source = 'API') {
         const { paymentId, mobile, email, productId, amount, currency, type, userId } = data;
