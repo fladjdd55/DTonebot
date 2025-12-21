@@ -23,12 +23,20 @@ export interface Transaction {
 }
 
 const handleResponse = async (response: Response) => {
-  const data = await response.json();
-  if (!response.ok) {
-    // Pass specific error codes (like 2FA_REQUIRED) through to the UI
-    throw new Error(data.error || 'Request failed');
-  }
-  return data;
+  // 1. Check if the response is JSON
+  const contentType = response.headers.get("content-type");
+  if (contentType && contentType.indexOf("application/json") !== -1) {
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Request failed');
+    }
+    return data;
+  } 
+  
+  // 2. If not JSON (e.g., HTML error page), read as text to debug
+  const text = await response.text();
+  console.error("Non-JSON Response:", text); // Check your browser console for this!
+  throw new Error(`Server Error: ${response.status} ${response.statusText}`);
 };
 
 const getAuthHeaders = (): Record<string, string> => {
