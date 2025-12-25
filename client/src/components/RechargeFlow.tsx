@@ -77,13 +77,14 @@ export default function RechargeFlow() {
     setLoading(true);
     try {
       // 1. Calculate Price on Server
+      const uniqueKey = `pi_${product.id}_${customAmount || product.amount}_${Date.now()}`;
       const intent = await rechargeApi.createPaymentIntent({
         productId: product.id,
         mobile: validationState.fullNumber,
         type: product.type,
         countryCode: selectedCountry.code, // ✅ SECURITY: Sending Country Code now!
         customAmount
-      });
+      }, uniqueKey);
       
       setPendingPurchase({ product, customAmount, intent });
       setShowConfirmModal(true);
