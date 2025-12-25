@@ -274,7 +274,8 @@ export default function PaymentModal({
           currency,
           productId,
           type: productType,
-          mobile
+          mobile,
+          countryCode
         })
       });
 

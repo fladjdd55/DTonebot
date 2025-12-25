@@ -95,11 +95,48 @@ export default function RechargeFlow() {
 
   // Execute Payment Success
   const handlePaymentSuccess = async (paymentId: string) => {
-     // ... (Existing logic to call rechargeApi.purchase)
-     // On success:
-     setTxnResult({ status: 'COMPLETED', id: '123' }); // Placeholder
-     setShowPayModal(false);
-     setStep(3);
+    // 1. Tell the user we are working
+    if (!pendingPurchase) return;
+    
+    try {
+      // 2. Call the Real Backend API
+      let result = await rechargeApi.purchase(
+        pendingPurchase.product.id,
+        validationState.fullNumber,
+        pendingPurchase.customAmount || parseFloat(pendingPurchase.product.amount),
+        'USD',
+        pendingPurchase.product.type,
+        paymentId
+      );
+
+      // 3. Self-Healing: If PENDING, poll for status
+      if (result.success && result.dbStatus === 'PENDING') {
+         const MAX_RETRIES = 15;
+         let retries = 0;
+         while (retries < MAX_RETRIES) {
+            await new Promise(r => setTimeout(r, 2000));
+            const update = await rechargeApi.checkStatus(paymentId);
+            if (update.status === 'COMPLETED' || update.status === 'FAILED') {
+               result = { ...result, ...update };
+               break;
+            }
+            retries++;
+         }
+      }
+
+      // 4. Handle Success/Fail
+      if (!result.success) {
+        setError(`Transaction Failed: ${result.message}`);
+        return;
+      }
+
+      setTxnResult(result);
+      setShowPayModal(false);
+      setStep(3); // Show Receipt
+
+    } catch (err: any) {
+      setError(err.message || 'Transaction processing failed');
+    }
   };
 
   return (
