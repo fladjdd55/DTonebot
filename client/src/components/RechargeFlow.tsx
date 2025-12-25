@@ -5,7 +5,7 @@ import { Phone, AlertCircle } from 'lucide-react';
 import { useCountries } from '../hooks/useCountries';
 import { useOperators } from '../hooks/useOperators';
 import { useProducts } from '../hooks/useProducts';
-import { formatPhoneNumber, extractDigits, validatePhoneNumber } from '../../shared/phoneValidator';
+import { formatPhoneNumber, extractDigits, validatePhoneNumber } from '../../../shared/phoneValidator';
 import { rechargeApi } from '../services/api';
 
 // Sub-Components
@@ -80,6 +80,7 @@ export default function RechargeFlow() {
       const intent = await rechargeApi.createPaymentIntent({
         productId: product.id,
         mobile: validationState.fullNumber,
+        type: product.type,
         countryCode: selectedCountry.code, // ✅ SECURITY: Sending Country Code now!
         customAmount
       });
