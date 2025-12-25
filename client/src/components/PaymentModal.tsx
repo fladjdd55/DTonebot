@@ -33,6 +33,7 @@ interface PaymentModalProps {
   mobile: string;
   productId: number;
   productType?: string;
+  countryCode?: string;
   clientSecret?: string;
   onSuccess?: (paymentId: string) => void;
   onError?: (error: string) => void;
@@ -206,6 +207,7 @@ export default function PaymentModal({
   mobile, 
   productId, 
   productType, 
+  countryCode,
   onSuccess, 
   onError, 
   transactionError, 

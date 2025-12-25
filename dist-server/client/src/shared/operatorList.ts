@@ -1,7 +1,7 @@
 /**
  * AUTO-GENERATED FILE
  * Source: DTOne API (Cached Operator List)
- * Timestamp: 2025-12-21T20:41:17.978Z
+ * Timestamp: 2025-12-23T07:24:11.064Z
  * * Run 'npx ts-node server/scripts/sync-operators.ts' to update.
  */
 
@@ -3205,12 +3205,6 @@ export const OPERATORS: Operator[] = [
     "id": 3181,
     "name": "Movilnet Venezuela",
     "countryCode": "VEN",
-    "regions": null
-  },
-  {
-    "id": 3191,
-    "name": "Smart Belize",
-    "countryCode": "BLZ",
     "regions": null
   },
   {

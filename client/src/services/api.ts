@@ -127,6 +127,20 @@ export const rechargeApi = {
     return data;
   },
 
+  async createPaymentIntent(data: { productId: number; mobile: string; type: string; customAmount?: number; countryCode?: string }, idempotencyKey?: string) {
+    const headers: Record<string, string> = {};
+    if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+
+    const res = await fetchWithAuth(`${API_URL}/create-payment-intent`, {
+      method: 'POST',
+      headers: headers,
+      body: JSON.stringify(data)
+    });
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to create payment intent');
+    return result;
+  },
+
   async purchase(productId: number, mobile: string, amount: number, unit: string, type: string, paymentId?: string) {
     const res = await fetchWithAuth(`${API_URL}/purchase`, {
       method: 'POST',
