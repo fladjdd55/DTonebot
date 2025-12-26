@@ -1,5 +1,5 @@
 export declare const env: {
-    NODE_ENV: "development" | "production" | "test";
+    NODE_ENV: "production" | "development" | "test";
     PORT: string;
     ALLOWED_ORIGINS: string[];
     DATABASE_URL: string;

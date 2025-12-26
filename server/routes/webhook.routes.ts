@@ -30,21 +30,31 @@ router.post('/stripe',
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
-    // Idempotency: Ignore events we already processed
+    // Idempotency: Only ignore events we have SUCCESSFULLY processed
     const existingEvent = await db.webhookEvent.findUnique({
       where: { eventId: event.id }
     });
-    if (existingEvent) return res.json({ received: true });
 
-    // Log the event
-    await db.webhookEvent.create({
-      data: {
-        eventId: event.id,
-        eventType: event.type,
-        payload: event.data.object as any,
-        processed: false
-      }
-    });
+    // FIX: Only return early if the event was actually fully processed.
+    // If it exists but processed is false, it means a previous attempt failed, 
+    // and we MUST allow this retry to proceed.
+    if (existingEvent?.processed) {
+      return res.json({ received: true });
+    }
+
+    // Log the event (Only create if it doesn't exist to prevent unique constraint errors on retry)
+    if (!existingEvent) {
+      await db.webhookEvent.create({
+        data: {
+          eventId: event.id,
+          eventType: event.type,
+          payload: event.data.object as any,
+          processed: false
+        }
+      });
+    } else {
+      logger.warn({ eventId: event.id }, 'Retrying previously failed webhook event');
+    }
 
     try {
       if (event.type === 'payment_intent.succeeded') {
@@ -72,6 +82,7 @@ router.post('/stripe',
       res.json({ received: true });
     } catch (error) {
       logger.error({ error, eventId: event.id }, 'Stripe Webhook Processing Failed');
+      // Return 500 to trigger Stripe Retry
       res.status(500).send('Webhook handler failed');
     }
   }

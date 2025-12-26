@@ -10,6 +10,8 @@ class RedisService {
     fallbackCache = new Map();
     isRedisAvailable = false;
     initializationPromise = null;
+    // Fix: Limit memory usage to prevent leaks during Redis outages
+    MAX_CACHE_SIZE = 5000;
     constructor() {
         // Lazy load on first usage
     }
@@ -165,6 +167,12 @@ class RedisService {
             if (existing && existing.expires > Date.now())
                 return null;
         }
+        // ✅ FIX: Prevent Memory Leak by enforcing Max Size (FIFO eviction)
+        if (this.fallbackCache.size >= this.MAX_CACHE_SIZE) {
+            const oldestKey = this.fallbackCache.keys().next().value;
+            if (oldestKey)
+                this.fallbackCache.delete(oldestKey);
+        }
         this.fallbackCache.set(key, {
             value,
             expires: ttl ? Date.now() + (ttl * 1000) : Infinity
@@ -211,12 +219,20 @@ class RedisService {
                 console.error('[Redis] INCR failed:', error.message);
             }
         }
-        // Memory Fallback: Atomic read-modify-write (because JS is single threaded)
+        // Memory Fallback: Atomic read-modify-write
         const currentData = this.fallbackCache.get(key);
         let currentValue = 0;
         // Check if expired
         if (currentData && currentData.expires > Date.now()) {
             currentValue = parseInt(currentData.value || '0');
+        }
+        else {
+            // ✅ FIX: Check capacity before creating new entry
+            if (this.fallbackCache.size >= this.MAX_CACHE_SIZE) {
+                const oldestKey = this.fallbackCache.keys().next().value;
+                if (oldestKey)
+                    this.fallbackCache.delete(oldestKey);
+            }
         }
         const newValue = currentValue + 1;
         this.fallbackCache.set(key, {

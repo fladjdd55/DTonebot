@@ -25,7 +25,10 @@ exports.pricingService = {
             currency: product.currency,
             // Check if it meets the global $5 minimum
             isBelowMin: finalCharge < config_1.GLOBAL_MIN_USD,
-            minRequired: config_1.GLOBAL_MIN_USD
+            minRequired: config_1.GLOBAL_MIN_USD,
+            // Check if it exceeds the global maximum (Overflow protection)
+            isAboveMax: finalCharge > config_1.GLOBAL_MAX_USD,
+            maxAllowed: config_1.GLOBAL_MAX_USD
         };
     },
     /**

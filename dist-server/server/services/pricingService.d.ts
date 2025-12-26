@@ -10,6 +10,8 @@ export declare const pricingService: {
         currency: any;
         isBelowMin: boolean;
         minRequired: number;
+        isAboveMax: boolean;
+        maxAllowed: number;
     };
     /**
      * Calculates the Safe Minimum Amount for the frontend.

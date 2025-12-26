@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 // ✅ FIX: Import CountryCode type for stricter validation
 import { isValidPhoneNumber, CountryCode } from 'libphonenumber-js'; 
 import { ApiResponse, LookupResult, Product, TransactionResult, Country } from './types';
+import { DTONE_TIMEOUT_MS } from './config'; // ✅ Import Timeout Config
 
 dotenv.config();
 
@@ -36,6 +37,27 @@ if (DTONE_MODE === 'production') {
 // 2. UTILITY FUNCTIONS
 // ==========================================
 
+// ✅ FIX: Timeout Wrapper to prevent hanging requests
+async function withTimeout<T>(promise: Promise<T>, tag: string): Promise<T> {
+  let timeoutId: NodeJS.Timeout;
+  
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      const err: any = new Error(`Request timed out after ${DTONE_TIMEOUT_MS}ms`);
+      err.code = 'ETIMEDOUT';
+      err.context = tag;
+      reject(err);
+    }, DTONE_TIMEOUT_MS);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    // @ts-ignore
+    clearTimeout(timeoutId);
+  }
+}
+
 function formatMobileForDtOne(mobile: string): string {
     let cleanMobile = mobile.replace(/[\s\-\(\)]/g, '');
     if (!cleanMobile.startsWith('+')) {
@@ -62,6 +84,12 @@ function generateTransactionId(): string {
 }
 
 function handleApiError(error: any, context: string): { error: string, code: string } {
+  // Handle Timeout Errors specially
+  if (error.code === 'ETIMEDOUT') {
+    console.error(`❌ [DTOne] ${context} Timed Out:`, error.message);
+    return { error: 'External provider timed out. Please try again.', code: 'GATEWAY_TIMEOUT' };
+  }
+
   const msg = error.response?.data?.errors?.[0]?.message || error.message || 'Unknown error';
   
   if (error.response?.data) {
@@ -105,11 +133,12 @@ export const dtoneService = {
       let hasMore = true;
 
       while (hasMore) {
-        const response = await dtone.getCountries({
+        // ✅ TIMEOUT WRAPPED
+        const response = await withTimeout(dtone.getCountries({
           service_id: serviceId,
           page: page,
           per_page: 100
-        });
+        }), `getCountries(p${page})`);
 
         const raw = response.data || response;
         const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || [])) as any[];
@@ -157,7 +186,12 @@ export const dtoneService = {
     }
 
     try {
-      const response = await dtone.postLookupMobileNumber({ mobile_number: cleanMobile });
+      // ✅ TIMEOUT WRAPPED
+      const response = await withTimeout(
+        dtone.postLookupMobileNumber({ mobile_number: cleanMobile }), 
+        'lookupMobileNumber'
+      );
+      
       const result = response.data || response;
       const match = (Array.isArray(result) ? result[0] : result) as any;
 
@@ -201,13 +235,14 @@ export const dtoneService = {
       while (hasMore) {
         console.log(`   ... fetching page ${page}`);
         
-        const response = await dtone.getProducts({
+        // ✅ TIMEOUT WRAPPED
+        const response = await withTimeout(dtone.getProducts({
           operator_id: operatorId,
           service_id: serviceId, 
           page: page,
           per_page: perPage,
           'Accept-Language': lang
-        });
+        }), `getProducts(p${page})`);
         
         const rawList = response.data || response;
         const list = (Array.isArray(rawList) ? rawList : ((rawList as any).payload || [])) as any[];
@@ -359,7 +394,12 @@ export const dtoneService = {
       
       console.log("📤 [DTOne] Payload:", JSON.stringify(payload, null, 2));
 
-      const response = await dtone.postTransactionSync(payload);
+      // ✅ TIMEOUT WRAPPED
+      const response = await withTimeout(
+        dtone.postTransactionSync(payload), 
+        'purchaseProduct'
+      );
+      
       const data = (response.data || response) as any;
 
       return {
@@ -407,7 +447,12 @@ export const dtoneService = {
     console.log(`[DTOne] 🔍 Checking status for: ${externalId}`);
     try {
       // Fetch list filtering by our unique external_id
-      const response = await dtone.getTransactions({ external_id: externalId });
+      // ✅ TIMEOUT WRAPPED
+      const response = await withTimeout(
+        dtone.getTransactions({ external_id: externalId }), 
+        'getTransaction'
+      );
+      
       const raw = response.data || response;
       const list = (Array.isArray(raw) ? raw : (raw.payload || [])) as any[];
 
@@ -441,11 +486,12 @@ export const dtoneService = {
       let hasMore = true;
 
       while (hasMore) {
-        const response = await dtone.getOperators({
+        // ✅ TIMEOUT WRAPPED
+        const response = await withTimeout(dtone.getOperators({
           service_id: serviceId,
           page: page,
           per_page: 100
-        });
+        }), `getOperators(p${page})`);
 
         const raw = response.data || response;
         const list = (Array.isArray(raw) ? raw : (raw.data || raw.payload || [])) as any[];

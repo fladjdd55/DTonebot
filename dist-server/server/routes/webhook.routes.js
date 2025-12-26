@@ -63,21 +63,30 @@ router.post('/stripe', express_1.default.raw({ type: 'application/json' }), asyn
         logger_1.logger.error({ err }, 'Stripe Webhook Signature Verification Failed');
         return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-    // Idempotency: Ignore events we already processed
+    // Idempotency: Only ignore events we have SUCCESSFULLY processed
     const existingEvent = await db_1.db.webhookEvent.findUnique({
         where: { eventId: event.id }
     });
-    if (existingEvent)
+    // FIX: Only return early if the event was actually fully processed.
+    // If it exists but processed is false, it means a previous attempt failed, 
+    // and we MUST allow this retry to proceed.
+    if (existingEvent?.processed) {
         return res.json({ received: true });
-    // Log the event
-    await db_1.db.webhookEvent.create({
-        data: {
-            eventId: event.id,
-            eventType: event.type,
-            payload: event.data.object,
-            processed: false
-        }
-    });
+    }
+    // Log the event (Only create if it doesn't exist to prevent unique constraint errors on retry)
+    if (!existingEvent) {
+        await db_1.db.webhookEvent.create({
+            data: {
+                eventId: event.id,
+                eventType: event.type,
+                payload: event.data.object,
+                processed: false
+            }
+        });
+    }
+    else {
+        logger_1.logger.warn({ eventId: event.id }, 'Retrying previously failed webhook event');
+    }
     try {
         if (event.type === 'payment_intent.succeeded') {
             const paymentIntent = event.data.object;
@@ -101,6 +110,7 @@ router.post('/stripe', express_1.default.raw({ type: 'application/json' }), asyn
     }
     catch (error) {
         logger_1.logger.error({ error, eventId: event.id }, 'Stripe Webhook Processing Failed');
+        // Return 500 to trigger Stripe Retry
         res.status(500).send('Webhook handler failed');
     }
 });

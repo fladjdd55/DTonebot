@@ -3,6 +3,7 @@ export declare class RedisService {
     private fallbackCache;
     private isRedisAvailable;
     private initializationPromise;
+    private readonly MAX_CACHE_SIZE;
     constructor();
     private ensureConnection;
     private initialize;

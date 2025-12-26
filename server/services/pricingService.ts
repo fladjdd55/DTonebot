@@ -1,4 +1,4 @@
-import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
+import { GLOBAL_MIN_USD, GLOBAL_MAX_USD, FALLBACK_MARGIN } from '../config';
 
 export const pricingService = {
   /**
@@ -26,7 +26,10 @@ export const pricingService = {
       currency: product.currency,
       // Check if it meets the global $5 minimum
       isBelowMin: finalCharge < GLOBAL_MIN_USD,
-      minRequired: GLOBAL_MIN_USD
+      minRequired: GLOBAL_MIN_USD,
+      // Check if it exceeds the global maximum (Overflow protection)
+      isAboveMax: finalCharge > GLOBAL_MAX_USD,
+      maxAllowed: GLOBAL_MAX_USD
     };
   },
 

@@ -37,6 +37,11 @@ router.post('/create-payment-intent', optionalAuth, async (req: Request, res: Re
     if (pricing.isBelowMin) {
       return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
     }
+    
+    // Prevent overflow/abuse
+    if (pricing.isAboveMax) {
+      return res.status(400).json({ error: `Max order is $${pricing.maxAllowed}` });
+    }
 
     const result = await paymentService.createPaymentIntent(pricing.finalCharge, 'USD', {
       productId: Number(productId),
@@ -175,6 +180,11 @@ router.post('/calculate-price', requireAuth, async (req: Request, res: Response)
 
     if (pricing.isBelowMin) {
        return res.status(400).json({ error: `Min order is $${pricing.minRequired}` });
+    }
+    
+    // Prevent overflow/abuse
+    if (pricing.isAboveMax) {
+      return res.status(400).json({ error: `Max order is $${pricing.maxAllowed}` });
     }
 
     const response: PriceResponse = {
