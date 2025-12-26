@@ -7,6 +7,7 @@ const redis_1 = require("./redis");
 const dtone_1 = require("../dtone");
 const payment_1 = require("../payment");
 const pricingService_1 = require("./pricingService");
+const logger_1 = require("../lib/logger"); // ✅ Import Logger
 exports.transactionService = {
     // Helper: Calculate Safe Minimum Amount
     getSafeMinAmount(p) {
@@ -21,7 +22,7 @@ exports.transactionService = {
         const processedKey = `processed:${paymentId}`;
         const alreadyProcessed = await redis.get(processedKey);
         if (alreadyProcessed) {
-            console.log(`[Purchase] ⏭️ Skipping ${paymentId} (Idempotency Key Found)`);
+            logger_1.logger.info({ paymentId }, `[Purchase] ⏭️ Skipping (Idempotency Key Found)`);
             const existing = await db_1.db.transaction.findUnique({
                 where: { paymentIntentId: paymentId }
             });
@@ -69,7 +70,7 @@ exports.transactionService = {
                 }
             }
             if (!mobileToUse) {
-                console.error(`[Purchase] ❌ FATAL: No mobile number for ${paymentId}`);
+                logger_1.logger.error({ paymentId }, `[Purchase] ❌ FATAL: No mobile number`);
                 return { success: false, error: "Mobile number missing" };
             }
             if (!existing) {
@@ -103,11 +104,11 @@ exports.transactionService = {
                 : undefined;
             const result = await dtone_1.dtoneService.purchaseProduct(productId, mobileToUse, amount, currency, type, callbackUrl);
             if (!result.success || !result.data) {
-                console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
+                logger_1.logger.error({ paymentId, error: result.error }, `[Purchase] ❌ DTOne Error`);
                 const refund = await payment_1.paymentService.refundPayment(paymentId);
                 const failStatus = refund ? client_1.TransactionStatus.REFUNDED : client_1.TransactionStatus.REFUND_FAILED;
                 if (!refund)
-                    console.error(`[CRITICAL] 🚨 Refund failed for payment ${paymentId}`);
+                    logger_1.logger.error({ paymentId }, `[CRITICAL] 🚨 Refund failed after API error`);
                 await db_1.db.transaction.update({
                     where: { paymentIntentId: paymentId },
                     data: { status: failStatus, externalId: `failed_${paymentId}` }
@@ -122,11 +123,11 @@ exports.transactionService = {
                 dbStatus = client_1.TransactionStatus.COMPLETED;
             }
             else if ([3, 9].includes(statusId || 0)) {
-                console.warn(`[Purchase] ⚠️ Declined. Refunding...`);
+                logger_1.logger.warn({ paymentId }, `[Purchase] ⚠️ Declined. Refunding...`);
                 const refund = await payment_1.paymentService.refundPayment(paymentId);
                 dbStatus = client_1.TransactionStatus.FAILED;
                 if (!refund)
-                    console.error(`[CRITICAL] 🚨 Refund failed for declined payment ${paymentId}`);
+                    logger_1.logger.error({ paymentId }, `[CRITICAL] 🚨 Refund failed for declined payment`);
             }
             await db_1.db.transaction.update({
                 where: { paymentIntentId: paymentId },
@@ -134,6 +135,11 @@ exports.transactionService = {
             });
             // ✅ SUCCESS: Mark this payment ID as processed for 24 hours
             await redis.set(processedKey, '1', 'EX', 86400);
+            logger_1.logger.info({
+                paymentId,
+                status: dbStatus,
+                externalId: result.data.externalId
+            }, '[Purchase] Completed successfully');
             if (userId) {
                 await db_1.db.auditLog.create({
                     data: {
@@ -146,7 +152,7 @@ exports.transactionService = {
                             status: dbStatus
                         }
                     }
-                }).catch(console.error);
+                }).catch((e) => logger_1.logger.error({ err: e }, 'Audit Log Failed'));
             }
             return {
                 success: dbStatus === client_1.TransactionStatus.COMPLETED || dbStatus === client_1.TransactionStatus.PENDING,

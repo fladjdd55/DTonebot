@@ -4,7 +4,7 @@ import { getRedis } from './redis';
 import { dtoneService } from '../dtone';
 import { paymentService } from '../payment';
 import { pricingService } from './pricingService';
-import { GLOBAL_MIN_USD, FALLBACK_MARGIN } from '../config';
+import { logger } from '../lib/logger'; // ✅ Import Logger
 
 export const transactionService = {
   // Helper: Calculate Safe Minimum Amount
@@ -35,17 +35,18 @@ export const transactionService = {
     const alreadyProcessed = await redis.get(processedKey);
     
     if (alreadyProcessed) {
-      console.log(`[Purchase] ⏭️ Skipping ${paymentId} (Idempotency Key Found)`);
+      logger.info({ paymentId }, `[Purchase] ⏭️ Skipping (Idempotency Key Found)`);
       const existing = await db.transaction.findUnique({
         where: { paymentIntentId: paymentId }
       });
 
-  return {
-    success: existing?.status === TransactionStatus.COMPLETED,
-    dbStatus: existing?.status || TransactionStatus.PENDING,
-    alreadyProcessed: true
-  };
-}
+      return {
+        success: existing?.status === TransactionStatus.COMPLETED,
+        dbStatus: existing?.status || TransactionStatus.PENDING,
+        alreadyProcessed: true
+      };
+    }
+    
     const lockKey = `lock:purchase:${paymentId}`;
     const isLocked = await redis.set(lockKey, '1', 'EX', 15, 'NX');
     if (!isLocked) {
@@ -90,7 +91,7 @@ export const transactionService = {
       }
       
       if (!mobileToUse) {
-        console.error(`[Purchase] ❌ FATAL: No mobile number for ${paymentId}`);
+        logger.error({ paymentId }, `[Purchase] ❌ FATAL: No mobile number`);
         return { success: false, error: "Mobile number missing" };
       }
 
@@ -129,11 +130,12 @@ export const transactionService = {
       );
 
       if (!result.success || !result.data) {
-        console.error(`[Purchase] ❌ DTOne Error: ${result.error}`);
+        logger.error({ paymentId, error: result.error }, `[Purchase] ❌ DTOne Error`);
+        
         const refund = await paymentService.refundPayment(paymentId);
         
         const failStatus = refund ? TransactionStatus.REFUNDED : TransactionStatus.REFUND_FAILED;
-        if (!refund) console.error(`[CRITICAL] 🚨 Refund failed for payment ${paymentId}`);
+        if (!refund) logger.error({ paymentId }, `[CRITICAL] 🚨 Refund failed after API error`);
 
         await db.transaction.update({
           where: { paymentIntentId: paymentId },
@@ -152,10 +154,10 @@ export const transactionService = {
       if (statusId === 7) {
         dbStatus = TransactionStatus.COMPLETED;
       } else if ([3, 9].includes(statusId || 0)) {
-        console.warn(`[Purchase] ⚠️ Declined. Refunding...`);
+        logger.warn({ paymentId }, `[Purchase] ⚠️ Declined. Refunding...`);
         const refund = await paymentService.refundPayment(paymentId);
         dbStatus = TransactionStatus.FAILED;
-        if (!refund) console.error(`[CRITICAL] 🚨 Refund failed for declined payment ${paymentId}`);
+        if (!refund) logger.error({ paymentId }, `[CRITICAL] 🚨 Refund failed for declined payment`);
       }
 
       await db.transaction.update({
@@ -165,6 +167,12 @@ export const transactionService = {
 
       // ✅ SUCCESS: Mark this payment ID as processed for 24 hours
       await redis.set(processedKey, '1', 'EX', 86400);
+
+      logger.info({ 
+        paymentId, 
+        status: dbStatus, 
+        externalId: result.data.externalId 
+      }, '[Purchase] Completed successfully');
 
       if (userId) {
         await db.auditLog.create({
@@ -178,7 +186,7 @@ export const transactionService = {
               status: dbStatus
             }
           }
-        }).catch(console.error);
+        }).catch((e) => logger.error({ err: e }, 'Audit Log Failed'));
       }
 
       return { 

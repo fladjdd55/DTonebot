@@ -6,6 +6,7 @@ import { paymentService } from '../payment'; // ✅ Import Payment Service for r
 import { TransactionStatus } from '@prisma/client';
 import { dtoneBasicAuth } from '../middleware/basicAuth';
 import { dtoneIpWhitelist } from '../middleware/ipWhitelist';
+import { logger } from '../lib/logger'; // ✅ Import Logger
 
 const router = Router();
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
@@ -25,6 +26,7 @@ router.post('/stripe',
     try {
       event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     } catch (err: any) {
+      logger.error({ err }, 'Stripe Webhook Signature Verification Failed');
       return res.status(400).send(`Webhook Error: ${err.message}`);
     }
 
@@ -48,6 +50,8 @@ router.post('/stripe',
       if (event.type === 'payment_intent.succeeded') {
         const paymentIntent = event.data.object as Stripe.PaymentIntent;
         
+        logger.info({ paymentId: paymentIntent.id }, 'Stripe Payment Succeeded');
+
         await transactionService.processPurchase({
           paymentId: paymentIntent.id,
           mobile: paymentIntent.metadata.mobile,
@@ -67,7 +71,7 @@ router.post('/stripe',
 
       res.json({ received: true });
     } catch (error) {
-      console.error('Webhook handler failed:', error);
+      logger.error({ error, eventId: event.id }, 'Stripe Webhook Processing Failed');
       res.status(500).send('Webhook handler failed');
     }
   }
@@ -85,7 +89,7 @@ router.post('/dtone',
     
     // A. Validate Payload
     if (!external_id || !status || !status.class?.id) {
-      console.warn('[DTOne Webhook] Invalid payload structure');
+      logger.warn({ body: req.body }, '[DTOne Webhook] Invalid payload structure');
       return res.status(400).send('Invalid payload');
     }
     
@@ -96,7 +100,7 @@ router.post('/dtone',
     
     if (!transaction) {
       // Return 200 to stop DTOne from retrying for a transaction we don't have
-      console.error(`[DTOne Webhook] Transaction not found: ${external_id}`);
+      logger.error({ external_id }, `[DTOne Webhook] Transaction not found`);
       return res.status(200).send('Transaction not found (Ignored)');
     }
 
@@ -124,39 +128,64 @@ router.post('/dtone',
     };
     
     if (newStatus && !validTransitions[transaction.status]?.includes(newStatus)) {
-      console.warn(`[DTOne Webhook] Ignored transition: ${transaction.status} -> ${newStatus}`);
+      logger.warn({ 
+        external_id, 
+        current: transaction.status, 
+        new: newStatus 
+      }, `[DTOne Webhook] Ignored transition`);
       return res.status(200).send('Invalid transition (Ignored)');
     }
 
-    // F. Update Database & Handle Refunds
+    // F. Update Database & Handle Refunds (ATOMICALLY)
     if (newStatus) {
       
       // 🚨 CRITICAL REFUND LOGIC 🚨
-      // If DTOne says "FAILED" but we haven't refunded yet, do it now.
-      if (newStatus === TransactionStatus.FAILED && transaction.status !== TransactionStatus.FAILED) {
-        console.log(`[DTOne Webhook] ⚠️ Transaction ${external_id} failed remotely. Triggering Refund...`);
-        
-        const refund = await paymentService.refundPayment(transaction.paymentIntentId);
-        
-        if (refund) {
-          console.log(`[DTOne Webhook] 💸 Refunded ${transaction.paymentIntentId}`);
-          newStatus = TransactionStatus.REFUNDED;
-        } else {
-          console.error(`[DTOne Webhook] ❌ Refund FAILED for ${transaction.paymentIntentId}`);
-          newStatus = TransactionStatus.REFUND_FAILED; // Needs manual Admin fix
-        }
-      }
+      // Determine if we *intend* to refund based on the incoming status
+      const needsRefund = newStatus === TransactionStatus.FAILED && transaction.status !== TransactionStatus.FAILED;
 
-      await db.transaction.update({
-        where: { externalId: external_id },
+      // 1. Attempt Atomic Update (Optimistic Locking)
+      // We only update if the status is currently what we think it is.
+      const result = await db.transaction.updateMany({
+        where: { 
+          externalId: external_id,
+          status: transaction.status // 🔒 LOCK: Ensure nobody else changed it
+        },
         data: { 
           status: newStatus,
           dtoneTransactionId: id?.toString(),
           updatedAt: new Date()
         }
       });
-      
-      console.log(`✅ [DTOne Webhook] Updated ${external_id} to ${newStatus}`);
+
+      // If count is 0, the DB state changed while we were processing (Race Condition)
+      if (result.count === 0) {
+        logger.warn({ external_id }, '[DTOne Webhook] Race condition detected. Transaction state changed concurrently.');
+        return res.status(200).send('State mismatch (Ignored)');
+      }
+
+      logger.info({ external_id, from: transaction.status, to: newStatus }, `[DTOne Webhook] Status Updated`);
+
+      // 2. Execute Side Effects (Refund)
+      // Only runs if we successfully updated the DB status to FAILED
+      if (needsRefund) {
+        logger.info({ paymentId: transaction.paymentIntentId }, `[DTOne Webhook] Triggering Refund...`);
+        
+        const refund = await paymentService.refundPayment(transaction.paymentIntentId);
+        
+        // Update DB again with the result of the refund
+        const finalStatus = refund ? TransactionStatus.REFUNDED : TransactionStatus.REFUND_FAILED;
+        
+        await db.transaction.update({
+          where: { id: transaction.id }, // Safe to use ID now as we own the record
+          data: { status: finalStatus }
+        });
+
+        if (refund) {
+           logger.info({ paymentId: transaction.paymentIntentId }, `[DTOne Webhook] 💸 Refunded Successfully`);
+        } else {
+           logger.error({ paymentId: transaction.paymentIntentId }, `[DTOne Webhook] ❌ Refund FAILED`);
+        }
+      }
     }
     
     return res.status(200).send('OK');

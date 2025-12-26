@@ -217,6 +217,7 @@ export class RedisService {
     return 'PONG';
   }
 
+  // ✅ FIXED: Synchronous update for memory fallback to prevent race conditions
   async incr(key: string, ttlSeconds?: number): Promise<number> {
     await this.ensureConnection();
     const ttl = ttlSeconds ? Math.ceil(ttlSeconds) : undefined;
@@ -231,11 +232,23 @@ export class RedisService {
       }
     }
 
-    const current = await this.get(key);
-    const newValue = (parseInt(current || '0') + 1).toString();
-    // Use standard set, fallback handles it
-    await this.set(key, newValue, ttl || 3600); 
-    return parseInt(newValue);
+    // Memory Fallback: Atomic read-modify-write (because JS is single threaded)
+    const currentData = this.fallbackCache.get(key);
+    let currentValue = 0;
+    
+    // Check if expired
+    if (currentData && currentData.expires > Date.now()) {
+        currentValue = parseInt(currentData.value || '0');
+    }
+
+    const newValue = currentValue + 1;
+    
+    this.fallbackCache.set(key, {
+        value: newValue.toString(),
+        expires: ttl ? Date.now() + (ttl * 1000) : (currentData?.expires || Infinity)
+    });
+
+    return newValue;
   }
 
   async close(): Promise<void> {
