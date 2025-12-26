@@ -61,7 +61,10 @@ const envSchema = z.object({
   ),
   
   // Optional: Callback URL base
-  DTONE_CALLBACK_URL: z.string().url().optional(),
+  DTONE_CALLBACK_URL: z.string()
+    .url({ message: "DTONE_CALLBACK_URL must start with https:// or http://" })
+    .optional()
+    .or(z.literal('')), // Allow empty string to mean "undefined"
 
   // ==============================================
   // 💳 STRIPE PAYMENTS

@@ -87,6 +87,7 @@ model Product {
   serviceId     Int
   subserviceId  Int?
   operatorId    Int
+  operator      Operator  @relation(fields: [operatorId], references: [id])
   currency      String
   amount        Float?
   minAmount     Float?
@@ -107,6 +108,25 @@ model Product {
   @@index([operatorId, currency])
   @@index([serviceId, subserviceId])
   @@map("products")
+}
+
+model Operator {
+  id          Int       @id
+  name        String
+  countryId   Int
+  country     Country   @relation(fields: [countryId], references: [id])
+  products    Product[]
+  
+  @@map("operators")
+}
+
+model Country {
+  id        Int        @id
+  isoCode   String     
+  name      String
+  operators Operator[]
+
+  @@map("countries")
 }
 
 model RefreshToken {

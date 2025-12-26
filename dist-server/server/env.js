@@ -48,7 +48,10 @@ const envSchema = zod_1.z.object({
     // Optional: Clean list of IPs for whitelist (comma separated)
     DTONE_WHITELIST_IPS: zod_1.z.string().default('').transform((val) => val.split(',').map(ip => ip.trim()).filter(Boolean)),
     // Optional: Callback URL base
-    DTONE_CALLBACK_URL: zod_1.z.string().url().optional(),
+    DTONE_CALLBACK_URL: zod_1.z.string()
+        .url({ message: "DTONE_CALLBACK_URL must start with https:// or http://" })
+        .optional()
+        .or(zod_1.z.literal('')), // Allow empty string to mean "undefined"
     // ==============================================
     // 💳 STRIPE PAYMENTS
     // ==============================================

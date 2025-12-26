@@ -3,8 +3,8 @@
 // @ts-ignore
 import dtone from '@api/dtone';
 import dotenv from 'dotenv';
-// ✅ FIX: Import robust phone validator
-import { isValidPhoneNumber } from 'libphonenumber-js'; 
+// ✅ FIX: Import CountryCode type for stricter validation
+import { isValidPhoneNumber, CountryCode } from 'libphonenumber-js'; 
 import { ApiResponse, LookupResult, Product, TransactionResult, Country } from './types';
 
 dotenv.config();
@@ -44,9 +44,14 @@ function formatMobileForDtOne(mobile: string): string {
     return cleanMobile;
 }
 
-// ✅ FIX: Replaced Regex with libphonenumber-js
-function validateMobileNumber(mobile: string): boolean {
-  // Checks if it is a possible valid number in ANY country
+// ✅ FIX: Validate against specific Country ISO if provided
+function validateMobileNumber(mobile: string, countryIso?: string): boolean {
+  if (countryIso) {
+    // Checks if the number is valid specifically for this country
+    // e.g. (+234..., 'US') -> False
+    return isValidPhoneNumber(mobile, countryIso as CountryCode);
+  }
+  // Fallback: Checks if it is a possible valid number in ANY country
   return isValidPhoneNumber(mobile);
 }
 
@@ -146,7 +151,7 @@ export const dtoneService = {
     const cleanMobile = formatMobileForDtOne(mobile); 
     console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
 
-    // ✅ FIX: Uses the new robust validation
+    // Basic validation (any country)
     if (!validateMobileNumber(cleanMobile)) {
       return { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' };
     }
@@ -308,14 +313,25 @@ export const dtoneService = {
     amount: number, 
     unit?: string, 
     type?: string, 
-    callbackUrl?: string
+    callbackUrl?: string,
+    countryIso?: string // 👈 NEW PARAMETER for validation
   ): Promise<ApiResponse<TransactionResult>> {
     
     const cleanMobile = formatMobileForDtOne(mobile);
 
-    // ✅ FIX: Uses the new robust validation
-    if (!validateMobileNumber(cleanMobile)) {
-      return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
+    // ✅ FIX: Validate country mismatch and validity
+    if (!validateMobileNumber(cleanMobile, countryIso)) {
+      const msg = countryIso 
+        ? `Mobile number does not match the selected country (${countryIso})` 
+        : 'Invalid mobile number (E.164 required)';
+      
+      console.warn(`[DTOne] ⚠️ Validation Failed: ${msg} for ${cleanMobile}`);
+      
+      return { 
+        success: false, 
+        error: msg, 
+        code: countryIso ? 'COUNTRY_MISMATCH' : 'INVALID_MOBILE' 
+      };
     }
 
     const externalId = generateTransactionId();
@@ -371,7 +387,17 @@ export const dtoneService = {
     const lookup = await dtoneService.lookupMobileNumber(mobile);
     if (!lookup.success) return lookup; 
     console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
-    return await dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined); 
+    
+    // ✅ FIX: Pass the discovered country ISO to the purchase function
+    return await dtoneService.purchaseProduct(
+      productId, 
+      mobile, 
+      amount, 
+      undefined, 
+      undefined, 
+      undefined, 
+      lookup.data?.countryIso
+    ); 
   },
 
   // ----------------------------------------

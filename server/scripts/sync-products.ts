@@ -1,21 +1,20 @@
 // server/scripts/sync-products.ts
 
-// ✅ FIX: Force IPv4 to prevent network hangs
 import dns from 'node:dns';
-if (dns.setDefaultResultOrder) {
-  dns.setDefaultResultOrder('ipv4first');
-}
-
-console.log("🚀 Script started! If you see this, the file is running.");
-
 import dotenv from 'dotenv';
 import path from 'path';
 import fs from 'fs';
 import pLimit from 'p-limit'; 
 
+// ❌ REMOVED GLOBAL SIDE EFFECT
+// The IPv4 force block was here. It has been moved to the bottom.
+
+console.log("🚀 Script loaded.");
+
 // Force load .env from the root directory
 const envPath = path.resolve(__dirname, '../../.env');
-console.log(`📂 Loading .env from: ${envPath}`);
+// Only log this if we are running as a script, to avoid spamming server logs on boot
+if (require.main === module) console.log(`📂 Loading .env from: ${envPath}`);
 dotenv.config({ path: envPath });
 
 import { db } from '../db';
@@ -44,11 +43,16 @@ function loadCheckpoint(): Set<number> {
   return new Set();
 }
 
+// ✅ FIX: Atomic Write Pattern (Prevents corruption on crash)
 function saveCheckpoint(processed: Set<number>) {
+  const tempFile = `${CHECKPOINT_FILE}.tmp`;
   try {
-    fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify({ processed: Array.from(processed) }, null, 2));
+    // 1. Write to temp file
+    fs.writeFileSync(tempFile, JSON.stringify({ processed: Array.from(processed) }, null, 2));
+    // 2. Atomic Rename (replaces old file instantly)
+    fs.renameSync(tempFile, CHECKPOINT_FILE);
   } catch (e) {
-    console.error("⚠️ Failed to save checkpoint.");
+    console.error("⚠️ Failed to save checkpoint:", e);
   }
 }
 
@@ -117,7 +121,6 @@ export async function syncProducts() {
     const totalOps = opsToProcess.length;
 
     // We are fetching Service ID 1 (Mobile)
-    // If you add Gift Cards later, you'll change this or add a loop.
     const TARGET_SERVICE_ID = 1; 
 
     const tasks = opsToProcess.map((op) => {
@@ -155,10 +158,9 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min,
                                 maxAmount: p.max,
-				benefits: p.benefits || [],
-                                // ✅ NEW ARCHITECTURE: Split IDs
-                                serviceId: TARGET_SERVICE_ID,   // 1 (Mobile)
-                                subserviceId: p.subserviceId,   // 11 (Airtime), 12 (Data)...
+                                benefits: p.benefits || [],
+                                serviceId: TARGET_SERVICE_ID,   
+                                subserviceId: p.subserviceId,   
                                 costPrice: p.costPrice || null,
                                 costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,
@@ -169,7 +171,6 @@ export async function syncProducts() {
                                 id: p.id,
                                 name: p.name,
                                 type: p.type,
-                                // ✅ NEW ARCHITECTURE: Split IDs
                                 serviceId: TARGET_SERVICE_ID,   
                                 subserviceId: p.subserviceId,   
                                 operatorId: op.id,
@@ -177,7 +178,7 @@ export async function syncProducts() {
                                 amount: fixedAmount,
                                 minAmount: p.min || null,
                                 maxAmount: p.max || null,
-				benefits: p.benefits || [],
+                                benefits: p.benefits || [],
                                 costPrice: p.costPrice || null,
                                 costPriceMin: p.costPriceMin || null,
                                 costPriceMax: p.costPriceMax || null,
@@ -233,6 +234,12 @@ export async function syncProducts() {
   }
 }
 
+// ✅ FIX: Apply DNS hack ONLY when running as a standalone script
+// This ensures that when 'index.ts' imports this file, it does NOT affect the server's DNS.
 if (require.main === module) {
+  if (dns.setDefaultResultOrder) {
+    console.log("🛠️  Running in Script Mode: Forcing IPv4 DNS resolution...");
+    dns.setDefaultResultOrder('ipv4first');
+  }
   syncProducts();
 }

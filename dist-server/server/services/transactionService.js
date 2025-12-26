@@ -7,7 +7,7 @@ const redis_1 = require("./redis");
 const dtone_1 = require("../dtone");
 const payment_1 = require("../payment");
 const pricingService_1 = require("./pricingService");
-const logger_1 = require("../lib/logger"); // ✅ Import Logger
+const logger_1 = require("../lib/logger");
 exports.transactionService = {
     // Helper: Calculate Safe Minimum Amount
     getSafeMinAmount(p) {
@@ -16,16 +16,12 @@ exports.transactionService = {
     async processPurchase(data, source = 'API') {
         const { paymentId, mobile, email, productId, amount, currency, type, userId } = data;
         const redis = (0, redis_1.getRedis)();
-        // ✅ IDEMPOTENCY CHECK (Optimization)
-        // Check if this payment ID was already processed successfully in the last 24h.
-        // This prevents the "Lock Release Race" where Webhook grabs lock 1ms after API releases it.
+        // ✅ 1. IDEMPOTENCY CHECK
         const processedKey = `processed:${paymentId}`;
         const alreadyProcessed = await redis.get(processedKey);
         if (alreadyProcessed) {
             logger_1.logger.info({ paymentId }, `[Purchase] ⏭️ Skipping (Idempotency Key Found)`);
-            const existing = await db_1.db.transaction.findUnique({
-                where: { paymentIntentId: paymentId }
-            });
+            const existing = await db_1.db.transaction.findUnique({ where: { paymentIntentId: paymentId } });
             return {
                 success: existing?.status === client_1.TransactionStatus.COMPLETED,
                 dbStatus: existing?.status || client_1.TransactionStatus.PENDING,
@@ -42,6 +38,7 @@ exports.transactionService = {
                 where: { paymentIntentId: paymentId }
             });
             let mobileToUse = data.mobile;
+            // ✅ 2. HANDLE EXISTING TRANSACTIONS
             if (existing) {
                 if (existing.status === client_1.TransactionStatus.INITIALIZED) {
                     mobileToUse = existing.mobile;
@@ -55,13 +52,11 @@ exports.transactionService = {
                     });
                 }
                 else if (existing.status === client_1.TransactionStatus.COMPLETED) {
-                    // ✅ Self-Healing: If DB is complete but Redis key expired/missing, restore it.
                     await redis.set(processedKey, '1', 'EX', 86400);
                     return { success: true, ...existing, dbStatus: client_1.TransactionStatus.COMPLETED, alreadyProcessed: true };
                 }
-                else if (existing.status === client_1.TransactionStatus.FAILED ||
-                    existing.status === client_1.TransactionStatus.REFUNDED ||
-                    existing.status === client_1.TransactionStatus.REFUND_FAILED) {
+                // ✅ FIX: Cast the array to TransactionStatus[] to satisfy TypeScript strictness
+                else if ([client_1.TransactionStatus.FAILED, client_1.TransactionStatus.REFUNDED, client_1.TransactionStatus.REFUND_FAILED].includes(existing.status)) {
                     await redis.set(processedKey, '1', 'EX', 86400); // Mark failed as processed so we don't retry blindly
                     return { success: false, ...existing, dbStatus: existing.status, alreadyProcessed: true };
                 }
@@ -73,6 +68,7 @@ exports.transactionService = {
                 logger_1.logger.error({ paymentId }, `[Purchase] ❌ FATAL: No mobile number`);
                 return { success: false, error: "Mobile number missing" };
             }
+            // ✅ 3. CREATE TRANSACTION RECORD
             if (!existing) {
                 try {
                     await db_1.db.transaction.create({
@@ -99,10 +95,29 @@ exports.transactionService = {
                     throw err;
                 }
             }
+            // ✅ 4. FETCH COUNTRY ISO (NEW FIX)
+            // We attempt to find the country ISO for strict phone validation.
+            let countryIso;
+            try {
+                const productData = await db_1.db.product.findUnique({
+                    where: { id: productId },
+                    // @ts-ignore - Assuming you will add these relations later
+                    include: { operator: { include: { country: true } } }
+                });
+                if (productData?.operator?.country?.isoCode) {
+                    countryIso = productData.operator.country.isoCode;
+                }
+            }
+            catch (e) {
+                // Ignore DB lookup errors for strict validation
+            }
             const callbackUrl = process.env.DTONE_CALLBACK_URL
                 ? `${process.env.DTONE_CALLBACK_URL}/api/hooks/dtone`
                 : undefined;
-            const result = await dtone_1.dtoneService.purchaseProduct(productId, mobileToUse, amount, currency, type, callbackUrl);
+            // ✅ 5. CALL DTONE (PASSING COUNTRY ISO)
+            const result = await dtone_1.dtoneService.purchaseProduct(productId, mobileToUse, amount, currency, type, callbackUrl, countryIso // 👈 Passes the country code for strict validation
+            );
+            // ✅ 6. HANDLE RESULTS
             if (!result.success || !result.data) {
                 logger_1.logger.error({ paymentId, error: result.error }, `[Purchase] ❌ DTOne Error`);
                 const refund = await payment_1.paymentService.refundPayment(paymentId);
@@ -113,7 +128,6 @@ exports.transactionService = {
                     where: { paymentIntentId: paymentId },
                     data: { status: failStatus, externalId: `failed_${paymentId}` }
                 });
-                // ✅ Mark as processed (even if failed) so we don't retry automatically without intervention
                 await redis.set(processedKey, '1', 'EX', 86400);
                 return { success: false, error: result.error, code: result.code, refunded: !!refund };
             }
@@ -133,7 +147,6 @@ exports.transactionService = {
                 where: { paymentIntentId: paymentId },
                 data: { status: dbStatus, externalId: result.data.externalId }
             });
-            // ✅ SUCCESS: Mark this payment ID as processed for 24 hours
             await redis.set(processedKey, '1', 'EX', 86400);
             logger_1.logger.info({
                 paymentId,
@@ -145,12 +158,7 @@ exports.transactionService = {
                     data: {
                         action: 'PURCHASE',
                         userId: userId,
-                        metadata: {
-                            paymentId,
-                            productId,
-                            amount,
-                            status: dbStatus
-                        }
+                        metadata: { paymentId, productId, amount, status: dbStatus }
                     }
                 }).catch((e) => logger_1.logger.error({ err: e }, 'Audit Log Failed'));
             }

@@ -8,7 +8,7 @@ exports.dtoneService = void 0;
 // @ts-ignore
 const dtone_1 = __importDefault(require("@api/dtone"));
 const dotenv_1 = __importDefault(require("dotenv"));
-// ✅ FIX: Import robust phone validator
+// ✅ FIX: Import CountryCode type for stricter validation
 const libphonenumber_js_1 = require("libphonenumber-js");
 dotenv_1.default.config();
 // ==========================================
@@ -40,9 +40,14 @@ function formatMobileForDtOne(mobile) {
     }
     return cleanMobile;
 }
-// ✅ FIX: Replaced Regex with libphonenumber-js
-function validateMobileNumber(mobile) {
-    // Checks if it is a possible valid number in ANY country
+// ✅ FIX: Validate against specific Country ISO if provided
+function validateMobileNumber(mobile, countryIso) {
+    if (countryIso) {
+        // Checks if the number is valid specifically for this country
+        // e.g. (+234..., 'US') -> False
+        return (0, libphonenumber_js_1.isValidPhoneNumber)(mobile, countryIso);
+    }
+    // Fallback: Checks if it is a possible valid number in ANY country
     return (0, libphonenumber_js_1.isValidPhoneNumber)(mobile);
 }
 function generateTransactionId() {
@@ -127,7 +132,7 @@ exports.dtoneService = {
     async lookupMobileNumber(mobile) {
         const cleanMobile = formatMobileForDtOne(mobile);
         console.log(`[DTOne] Looking up operator for: ${cleanMobile}`);
-        // ✅ FIX: Uses the new robust validation
+        // Basic validation (any country)
         if (!validateMobileNumber(cleanMobile)) {
             return { success: false, error: 'Invalid mobile format (E.164 required)', code: 'INVALID_MOBILE' };
         }
@@ -260,11 +265,20 @@ exports.dtoneService = {
     // ----------------------------------------
     // D. PURCHASE
     // ----------------------------------------
-    async purchaseProduct(productId, mobile, amount, unit, type, callbackUrl) {
+    async purchaseProduct(productId, mobile, amount, unit, type, callbackUrl, countryIso // 👈 NEW PARAMETER for validation
+    ) {
         const cleanMobile = formatMobileForDtOne(mobile);
-        // ✅ FIX: Uses the new robust validation
-        if (!validateMobileNumber(cleanMobile)) {
-            return { success: false, error: 'Invalid mobile number (E.164 required)', code: 'INVALID_MOBILE' };
+        // ✅ FIX: Validate country mismatch and validity
+        if (!validateMobileNumber(cleanMobile, countryIso)) {
+            const msg = countryIso
+                ? `Mobile number does not match the selected country (${countryIso})`
+                : 'Invalid mobile number (E.164 required)';
+            console.warn(`[DTOne] ⚠️ Validation Failed: ${msg} for ${cleanMobile}`);
+            return {
+                success: false,
+                error: msg,
+                code: countryIso ? 'COUNTRY_MISMATCH' : 'INVALID_MOBILE'
+            };
         }
         const externalId = generateTransactionId();
         console.log(`[DTOne] Purchasing Product ${productId} for ${cleanMobile} [Ref: ${externalId}]...`);
@@ -313,7 +327,8 @@ exports.dtoneService = {
         if (!lookup.success)
             return lookup;
         console.log(`[DTOne] ➡️  Operator: ${lookup.data?.operatorName}`);
-        return await exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined);
+        // ✅ FIX: Pass the discovered country ISO to the purchase function
+        return await exports.dtoneService.purchaseProduct(productId, mobile, amount, undefined, undefined, undefined, lookup.data?.countryIso);
     },
     // ----------------------------------------
     // E.1. GET TRANSACTION STATUS
