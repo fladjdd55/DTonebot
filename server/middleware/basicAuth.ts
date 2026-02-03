@@ -18,9 +18,15 @@ export function dtoneBasicAuth(req: Request, res: Response, next: NextFunction) 
   const expectedUser = process.env.DTONE_WEBHOOK_USER;
   const expectedPass = process.env.DTONE_WEBHOOK_PASS;
 
+  // Fail fast if credentials are not configured
+  if (!expectedUser || !expectedPass) {
+    console.error('[Security] 🚫 DTONE_WEBHOOK_USER or DTONE_WEBHOOK_PASS not configured');
+    return res.status(500).send('Server Configuration Error');
+  }
+
   // Use timing-safe comparison to prevent timing attacks
-  const expectedUserBuffer = Buffer.from(expectedUser || '');
-  const expectedPassBuffer = Buffer.from(expectedPass || '');
+  const expectedUserBuffer = Buffer.from(expectedUser);
+  const expectedPassBuffer = Buffer.from(expectedPass);
   const usernameBuffer = Buffer.from(username || '');
   const passwordBuffer = Buffer.from(password || '');
 

@@ -149,7 +149,7 @@ export const authService = {
     
     // After password update, revoke all refresh tokens
     await db.refreshToken.updateMany({
-      where: { userId: userId },
+      where: { userId },
       data: { revoked: true }
     });
     
