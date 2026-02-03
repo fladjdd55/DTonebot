@@ -49,7 +49,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
     console.warn("⚠️  STRIPE_SECRET_KEY is missing in .env");
 }
 var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
-    apiVersion: '2023-10-16',
+// Using default API version from Stripe SDK
 });
 // Simple Notification Helper (Discord/Slack)
 function sendAdminAlert(message) {

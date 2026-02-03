@@ -30,7 +30,9 @@ const app = express();
 app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 5000;
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' as any });
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || '', { 
+  // Using default API version from Stripe SDK
+});
 
 const FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 const GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);

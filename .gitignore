@@ -48,3 +48,6 @@ backups/
 # Assets (can be removed locally if not needed)
 # attached_assets/
 /generated/prisma
+
+# Compiled server output
+dist-server/

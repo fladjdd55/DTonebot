@@ -74,7 +74,9 @@ var db_1 = require("./db");
 var app = (0, express_1.default)();
 app.set('trust proxy', 1);
 var PORT = process.env.PORT || 5000;
-var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', { apiVersion: '2023-10-16' });
+var stripe = new stripe_1.default(process.env.STRIPE_SECRET_KEY || '', {
+// Using default API version from Stripe SDK
+});
 var FALLBACK_MARGIN = Number(process.env.DTONE_FALLBACK_MARGIN) || 1.15;
 var GLOBAL_MIN_USD = Number(process.env.VITE_MIN_USD_ORDER || 5);
 // ==================================================================

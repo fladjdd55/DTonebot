@@ -147,6 +147,12 @@ export const authService = {
     const hash = await bcrypt.hash(newPass, salt);
     await db.user.update({ where: { id: userId }, data: { passwordHash: hash } });
     
+    // After password update, revoke all refresh tokens
+    await db.refreshToken.updateMany({
+      where: { userId },
+      data: { revoked: true }
+    });
+    
     return { success: true };
   }
 };
