@@ -248,6 +248,14 @@ exports.authService = {
                         return [4 /*yield*/, db_1.db.user.update({ where: { id: userId }, data: { passwordHash: hash } })];
                     case 5:
                         _a.sent();
+                        // After password update, revoke all refresh tokens
+                        return [4 /*yield*/, db_1.db.refreshToken.updateMany({
+                                where: { userId: userId },
+                                data: { revoked: true }
+                            })];
+                    case 6:
+                        // After password update, revoke all refresh tokens
+                        _a.sent();
                         return [2 /*return*/, { success: true }];
                 }
             });

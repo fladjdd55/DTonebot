@@ -1,6 +1,7 @@
 // server/middleware/basicAuth.ts
 
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 
 export function dtoneBasicAuth(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
@@ -17,7 +18,19 @@ export function dtoneBasicAuth(req: Request, res: Response, next: NextFunction) 
   const expectedUser = process.env.DTONE_WEBHOOK_USER;
   const expectedPass = process.env.DTONE_WEBHOOK_PASS;
 
-  if (username !== expectedUser || password !== expectedPass) {
+  // Use timing-safe comparison to prevent timing attacks
+  const expectedUserBuffer = Buffer.from(expectedUser || '');
+  const expectedPassBuffer = Buffer.from(expectedPass || '');
+  const usernameBuffer = Buffer.from(username || '');
+  const passwordBuffer = Buffer.from(password || '');
+
+  // Ensure buffers are same length for timingSafeEqual
+  const usernameMatch = usernameBuffer.length === expectedUserBuffer.length && 
+    crypto.timingSafeEqual(usernameBuffer, expectedUserBuffer);
+  const passwordMatch = passwordBuffer.length === expectedPassBuffer.length && 
+    crypto.timingSafeEqual(passwordBuffer, expectedPassBuffer);
+
+  if (!usernameMatch || !passwordMatch) {
     console.warn('[Security] 🚫 Invalid credentials on DTOne callback');
     return res.status(401).send('Unauthorized');
   }
